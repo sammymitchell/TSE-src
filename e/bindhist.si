@@ -1,0 +1,402 @@
+// User historys are stored in descending, sorted order
+
+constant
+    DEL_HISTORY = 0,
+    VIEW_HISTORY = 1,
+    DEL_HISTORY_STR = 2,
+    GET_HISTORY_STR = 3,
+    NUM_HISTORY_ITEMS = 4,
+    FIND_HISTORY_STR = 5
+constant
+    MAX_USER_HISTORYS = 127,
+    MIN_USER_HISTORY  = 1
+constant
+    MAX_HISTORY_LEN = TEMP_STRING_SIZE
+
+string history_signature[] = "®TSE History¯"
+
+integer
+    save_history_line,
+    save_history_no,
+    save_i,
+    num_user_historys               // number of user historys
+
+string proc HistoryFilename(string hist_fn)
+    return (iif(Length(hist_fn), hist_fn, LoadDir() + "tsehist.dat"))
+end
+
+public integer proc _cmSaveHistory(string hist_fn)
+    integer ok, prev_id = GotoBufferId(HISTORY_ID)
+
+    ok = FALSE
+    BegFile()
+    if NumLines() > 1
+        //Warn("save: ", num_user_historys) //???
+        InsertText(Format(Chr(num_user_historys), history_signature), _OVERWRITE_)
+        _cmKillToEol()
+        BinaryMode(-2)
+        ok = SaveAs(HistoryFilename(hist_fn), _OVERWRITE_|_DONT_PROMPT_)
+    endif
+    GotoBufferId(prev_id)
+    return (ok)
+end
+
+public integer proc _cmLoadHistory(string hist_fn)
+    integer prev_id
+
+    num_user_historys = 0
+    if not FileExists(HistoryFilename(hist_fn))
+        return (FALSE)
+    endif
+    prev_id = GotoBufferId(HISTORY_ID)
+    if not _cmLoadBuffer(HistoryFilename(hist_fn), -2) or
+            GetText(2, sizeof(history_signature)) <> history_signature
+        EmptyBuffer()
+        GotoBufferId(prev_id)
+        return (Warn(BOGUS_HISTORY))
+    endif
+    num_user_historys = CurrChar(1)
+    //Warn("Load:", num_user_historys)    //???
+    ClearLine()
+    GotoBufferId(prev_id)
+    return (TRUE)
+end
+
+integer proc GotoHistoryBuffer()
+    integer prev_id = GotoBufferId(HISTORY_ID)
+    if NumLines() == 0 and (not Query(PersistentHistory) or not _cmLoadHistory(""))
+        AddLine()
+        AddLine(Format(Chr(_FIND_OPTIONS_HISTORY_), Query(FindOptions)))
+        AddLine(Format(Chr(_REPLACE_OPTIONS_HISTORY_), Query(ReplaceOptions)))
+        BegFile()
+    endif
+    return (prev_id)
+end
+
+integer proc ProcessHistoryItem(integer history_no, integer n, integer f, var string s)
+    integer prev_id, i, max_width, ret
+    string history_str[MAX_HISTORY_LEN], options[3]
+
+    options = "^"
+    prev_id = GotoHistoryBuffer()
+    PushPosition()
+    history_str = Chr(history_no)
+    if f <> GET_HISTORY_STR
+        save_history_line = 0
+    endif
+    if save_history_line and save_history_no == history_no and save_i < n
+        GotoLine(save_history_line)
+        i = save_i
+    else
+        GotoLine(num_user_historys + 1)
+        i = 0
+    endif
+    GotoColumn(1)
+    if f == VIEW_HISTORY and Length(s)
+        history_str = s
+        options = "^li"
+        PushBlock()
+        MarkColumn(CurrLine(), 2, NumLines(), 128)
+    endif
+    max_width = 0
+    ret = 0
+    while Down() and lFind(history_str, options)
+        i = i + 1
+        case f
+            when DEL_HISTORY
+                _cmKillLine()
+                Up()
+            when DEL_HISTORY_STR
+                if i == n
+                    _cmKillLine()
+                    Up()
+                    ret = TRUE
+                    break
+                elseif i > n
+                    break
+                endif
+            when GET_HISTORY_STR
+                if i == n
+                    s = GetText(2, MAX_HISTORY_LEN)
+                    ret = TRUE
+                    save_history_line = CurrLine()
+                    save_history_no = history_no
+                    save_i = i
+                    break
+                endif
+            when FIND_HISTORY_STR
+                if GetText(2, MAX_HISTORY_LEN) == s
+                    ret = i
+                    break
+                endif
+            when NUM_HISTORY_ITEMS
+                if i > Query(MaxHistoryPerList)
+//                    Warn("NUM_HISTORY_ITEMS: killing because i is ", i)
+                    _cmKillLine()
+                    Up()
+                    i = i - 1
+                endif
+            when VIEW_HISTORY
+                if i > Query(MaxHistoryPerList)
+//                    Warn("View_HISTORY: killing because i is ", i)
+                    _cmKillLine()
+                    Up()
+                    i = i - 1
+                elseif PosLastNonWhite() > 1
+                    max_width = Max(max_width, CurrLineLen() - 1)
+                    AddLine(GetText(2, MAX_HISTORY_LEN), n)
+                else
+                    i = i - 1
+                endif
+        endcase
+    endwhile
+
+    case f
+        when DEL_HISTORY
+            ret = (i <> 0)
+        when VIEW_HISTORY
+            ret = max_width
+            if Length(s)
+                PopBlock()
+            endif
+        when NUM_HISTORY_ITEMS
+            ret = i
+    endcase
+    PopPosition()
+    GotoBufferId(prev_id)
+    return (ret)
+end
+
+forward proc DelHistoryEntry()
+
+keydef ViewHistoryKeys
+<del>       DelHistoryEntry()
+<greydel>   DelHistoryEntry()
+end
+
+proc ViewHistoryHelper()
+    if Enable(ViewHistoryKeys)
+        _cmListFooter(VIEWHISTORY_FOOTER)
+    endif
+    Unhook(ViewHistoryHelper)
+//    BreakHookChain()    // ??? should we???
+end
+
+//ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ Externally called routines ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+// Assume in HISTORY_ID when called
+integer proc ViewHistory(integer count)
+    integer max_width, ok, i, work_id
+    string s[MAX_HISTORY_LEN]
+
+    ok = FALSE
+    s = ''
+    work_id = GetWorkBuffer(_DONT_GOTO_BUFFER_)
+    PushPosition()
+    max_width = ProcessHistoryItem(Query(CurrHistoryList), work_id, VIEW_HISTORY, s)
+    PopPosition()
+    if max_width
+        s = iif(count, GetText(1, CurrLineLen()), '')
+        PushPosition()
+        max_width = Max(max_width, 19)
+        GotoBufferId(work_id)
+        BegFile()
+        Set(X1, WhereXAbs())
+        Set(Y1, iif(Query(ScreenRows) - WhereYAbs() < NumLines() + 1,
+                Max(Query(ScreenRows) - NumLines() - 1, 1), WhereYAbs()))
+        Hook(_LIST_STARTUP_, ViewHistoryHelper)
+        i = 0
+        if Length(s)
+            for i = 0 to Length(s) - 1
+                if not lFind(s[1:i + 1], "i")
+                    break
+                endif
+            endfor
+        endif
+        BegFile()
+        _cmPushKeyStr(s[1:i])        // rely on i == 0 if count == 0
+        if (ok = List(HISTORY, max_width)) <> 0
+            s = GetText(1, sizeof(s))
+        endif
+        PopPosition()
+        if ok
+            ClearLine()
+            InsertText(s, _OVERWRITE_)
+            EndLine()
+        endif
+    endif
+    FreeWorkBuffer(work_id)
+    return (ok)
+end
+
+/**************************************************************************
+  BOOLEAN return.
+  05/21/2003 SEM: if EDIT_FILE history, ignore case when removing
+    duplicates.
+ **************************************************************************/
+public integer proc _cmAddHistoryStr(string s, integer history_no)
+    integer prev_id, down_one
+    string line[MAX_HISTORY_LEN]
+    string remove_options[20] = "^$"
+
+    down_one = (history_no & 0x8000) <> 0   // called from PickFile?
+    history_no = history_no & ~0x8000       // get rid of it
+    if Query(MaxHistorySize) and history_no
+        if history_no == _EDIT_HISTORY_
+            remove_options = remove_options + "i"
+        endif
+        save_history_line = 0
+        line = Chr(history_no) + s
+        prev_id = GotoHistoryBuffer()
+        PushPosition()
+
+        GotoLine(num_user_historys + 2)
+        BegLine()
+        RemoveMatches(line, remove_options)
+
+        // handle _EDIT_HISTORY_ here...
+
+        if NumLines() > Query(MaxHistorySize)
+            GotoLine(NumLines())            // ensure we go to last visible line
+//            Warn("AddHistory: Killing because NumLines:", NumLines())
+            _cmKillLine()
+        endif
+
+        GotoLine(num_user_historys + 1 + down_one)
+        AddLine(line)
+        PopPosition()
+        GotoBufferId(prev_id)
+        return (TRUE)
+    endif
+    return (FALSE)
+end
+
+public integer proc _cmFindHistoryStr(string var_s, integer history_no)
+    string s[MAX_HISTORY_LEN] = var_s
+    return (ProcessHistoryItem(history_no, 0, FIND_HISTORY_STR, s))
+end
+
+public integer proc _cmNumHistoryItems(integer history_no)
+    string s[1] = ''
+
+    return (ProcessHistoryItem(history_no, 0, NUM_HISTORY_ITEMS, s))
+end
+
+public string proc _cmGetHistoryStr(integer history_no, integer i)
+    string s[MAX_HISTORY_LEN] = ''
+
+    ProcessHistoryItem(history_no, i, GET_HISTORY_STR, s)
+    return (s)
+end
+
+// BOOLEAN
+public integer proc _cmDelHistoryStr(integer history_no, integer i)
+    string s[1] = ''
+
+    return (ProcessHistoryItem(history_no, i, DEL_HISTORY_STR, s))
+end
+
+// BOOLEAN
+public integer proc _cmDelHistory(integer history_no)
+    integer prev_id
+    string s[1] = ''
+
+    prev_id = GotoHistoryBuffer()
+    PushPosition()
+    PushBlock()
+    GotoLine(2)
+    MarkColumn(2, 1, 2 + num_user_historys - 1, 1)
+    if lFind(Chr(history_no), "L^")
+        _cmKillLine()
+        num_user_historys = num_user_historys - 1
+    endif
+    PopBlock()
+    PopPosition()
+    GotoBufferId(prev_id)
+    return (ProcessHistoryItem(history_no, 0, DEL_HISTORY, s))
+end
+
+//return existing history number if there,
+//new if not and room, otherwise, 0
+public integer proc _cmGetFreeHistory(string s)
+    integer history, prev_id
+
+    prev_id = GotoHistoryBuffer()
+    history = 0
+    // See if a match on an existing history
+    PushPosition()
+    PushBlock()
+    GotoLine(2)
+    GotoColumn(2)
+    MarkColumn(2, 2, 2 + num_user_historys - 1, 2 + MAX_HISTORY_LEN - 1)
+    if lFind(s, "L^$")
+        history = CurrChar(1)
+    endif
+    PopBlock()
+    PopPosition()
+    if history
+        //Warn("Get->match:", history, " ", s)    //???
+        goto common_exit
+    endif
+    // Create a new history
+
+    if num_user_historys >= MAX_USER_HISTORYS
+        goto common_error_exit
+    endif
+
+    PushPosition()
+    BegFile()
+    if num_user_historys == 0
+        //Warn("Get->empty:", history)    //???
+        goto common2
+    endif
+
+    Down()
+    if (history = CurrChar(1)) < MAX_USER_HISTORYS
+        goto common
+    endif
+
+    do num_user_historys - 1 times
+        Down()
+        if history - CurrChar(1) > 1
+            goto common
+        endif
+        history = CurrChar(1)
+    enddo
+
+    if history > MIN_USER_HISTORY
+        goto common2
+    endif
+
+    PopPosition()
+    goto common_error_exit
+
+    common:
+    Up()
+
+    common2:
+    AddLine(Format(Chr(history + 1), s))
+    num_user_historys = num_user_historys + 1
+    PopPosition()
+    GotoBufferId(prev_id)
+    return (history + 1)
+
+    common_error_exit:
+    history = 0
+
+    common_exit:
+    GotoBufferId(prev_id)
+    return (history)
+end
+
+proc DelHistoryEntry()
+    integer index, history_no
+
+    history_no = Query(CurrHistoryList)
+    if (index = _cmFindHistoryStr(GetText(1, MAX_HISTORY_LEN), history_no)) <> 0
+        if _cmDelHistoryStr(history_no, index)
+            _cmKillLine()
+        endif
+    endif
+end
+

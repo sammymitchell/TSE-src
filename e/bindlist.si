@@ -1,0 +1,2503 @@
+// re-do the search_active stuff
+// see UnknownCmd()
+
+// make lister re-entrant
+
+// fix home/end to check ENABLE_HSCROLL and modify behavior
+
+// NOTE: Remove saving of CursorAttr from 4 functions and move to loProcess()
+//       modify prologue function with global variable to set "first" call
+//       and to prologue and set cursor attr accordingly
+
+#if 0
+proc log(string msg)
+    integer h
+
+    if FileExists("bind.log")
+        h = fOpen("bind.log", _OPEN_READWRITE_)
+        fSeek(h, 0, _SEEK_END_)
+    else
+        h = fCreate("bind.log")
+    endif
+    fWrite(h, msg + chr(10))
+    fclose(h)
+end
+#endif
+
+integer listflags   // neither of these are reentrant!!! used by lister
+integer last_pos    // neither of these are reentrant!!! used by pickdir
+string VIEW_FINDS_STR[] = "File: "
+#define VIEW_FINDS_LEN  6
+
+integer proc isViewFindStr()
+    return (GetText(1, VIEW_FINDS_LEN) == VIEW_FINDS_STR)
+end
+
+/************************************************************************
+  Read Keys:
+    right/left/up/down
+    home/end
+    tab/del/ins/bs
+    enter/escape
+
+  lister Keys:
+    Read Keys
+    PageUp/Down
+    ^PageUp/Down
+ ************************************************************************/
+
+#if 0
+public proc _cmMenuHelp(string option)
+    Help(option)
+end
+#endif
+
+proc common_epilog(integer event)
+    ExecHook(event)
+end
+
+// loaded by C code - referenced in key.c ~586
+KeyDef base_keys
+    // Movement keys first
+
+    <CursorRight>       Right()         // Used by Read/Help/'other' _cmList
+    <CursorLeft>        Left()          // Used by Read/Help/'other' _cmList
+    <CursorUp>          Up()            // All, mod by help/read
+    <CursorDown>        Down()          // All, mod by help/read
+
+    <Ctrl CursorDown>   RollDown()
+    <Ctrl CursorUp>     RollUp()
+    <ctrl CursorLeft>   Wordleft()
+    <ctrl CursorRight>  Wordright()
+
+    <Home>              BegLineTog()       // All
+    <End>               EndLineTog()       // All
+
+    <PgUp>              PageUp()        // Used by Help/_cmList
+    <PgDn>              PageDown()      // Used by Help/_cmList
+    <Ctrl PgUp>         BegFile()       // Used by Help/_cmList
+    <Ctrl PgDn>         EndFile()       // Used by Help/_cmList
+
+    // Termination keys
+
+    <Enter>             CReturn()
+    <Escape>            Escape()
+
+    // Editing keys
+
+    <BackSpace>         BackSpace()
+    <Del>               DelChar()
+    <Ins>               ToggleInsert()
+    <Tab>               TabRight()
+    <Shift Tab>         TabLeft()
+    <SpaceBar>          SelfInsert()
+
+    <Ctrl BackSpace>    DelLeftWord()
+    <Ctrl Del>          DelRightWord()
+    <Alt Del>           DelToEol()
+
+    // Mouse Btns
+
+    <LeftBtn>           lLeftBtn()
+    <RightBtn>          lRightBtn()
+
+    <WheelUp>           WheelUp()
+    <WheelDown>         WheelDown()
+
+    <F1>                Help()
+end base_keys
+
+KeyDef ForcedKeys
+    // Movement keys first
+
+    <CursorRight>       Right()         // Used by Read/Help/'other' _cmList
+    <CursorLeft>        Left()          // Used by Read/Help/'other' _cmList
+    <CursorUp>          Up()            // All, mod by help/read
+    <CursorDown>        Down()          // All, mod by help/read
+
+    <Ctrl CursorDown>   RollDown()
+    <Ctrl CursorUp>     RollUp()
+    <ctrl CursorLeft>   Wordleft()
+    <ctrl CursorRight>  Wordright()
+
+    <Home>              BegLineTog()       // All
+    <End>               EndLineTog()       // All
+
+    <PgUp>              PageUp()        // Used by Help/_cmList
+    <PgDn>              PageDown()      // Used by Help/_cmList
+    <Ctrl PgUp>         BegFile()       // Used by Help/_cmList
+    <Ctrl PgDn>         EndFile()       // Used by Help/_cmList
+
+    <GreyCursorRight>       Right()         // Used by Read/Help/'other' _cmList
+    <GreyCursorLeft>        Left()          // Used by Read/Help/'other' _cmList
+    <GreyCursorUp>          Up()            // All, mod by help/read
+    <GreyCursorDown>        Down()          // All, mod by help/read
+
+    <Ctrl GreyCursorDown>   RollDown()
+    <Ctrl GreyCursorUp>     RollUp()
+    <ctrl GreyCursorLeft>   Wordleft()
+    <ctrl GreyCursorRight>  Wordright()
+
+    <GreyHome>              BegLineTog()       // All
+    <GreyEnd>               EndLineTog()       // All
+
+    <GreyPgUp>              PageUp()        // Used by Help/_cmList
+    <GreyPgDn>              PageDown()      // Used by Help/_cmList
+    <Ctrl GreyPgUp>         BegFile()       // Used by Help/_cmList
+    <Ctrl GreyPgDn>         EndFile()       // Used by Help/_cmList
+
+    // Termination keys
+
+    <Enter>             CReturn()
+    <GreyEnter>         CReturn()
+    <Escape>            Escape()
+
+    // Editing keys
+
+    <BackSpace>         BackSpace()
+    <Del>               DelChar()
+    <Ins>               ToggleInsert()
+#ifdef LINUX
+    <Ctrl i>            TabRight()
+#endif
+    <Tab>               TabRight()
+    <Shift Tab>         TabLeft()
+    <SpaceBar>          SelfInsert()
+
+    <GreyDel>           DelChar()
+    <GreyIns>           ToggleInsert()
+
+    <Ctrl BackSpace>    DelLeftWord()
+    <Ctrl Del>          DelRightWord()
+    <Alt Del>           DelToEol()
+
+    // Mouse Btns
+
+    <LeftBtn>           lLeftBtn()
+    <RightBtn>          lRightBtn()
+
+    <WheelUp>           WheelUp()
+    <WheelDown>         WheelDown()
+
+    <F1>                Help()
+
+//    <Alt L>             MarkLine()
+//    <Grey+>             Copy()
+//    <Ctrl Grey+>        CopyAppend()
+end ForcedKeys
+
+proc ProcessLeftBtn()
+    case MouseHotSpot()
+        when _MOUSE_MARKING_
+            PushBlock()
+            UnmarkBlock()
+            GotoMouseCursor()
+            TrackMouseCursor()
+            PopBlock()
+            if MouseHotSpot() == _MOUSE_MARKING_
+                EndProcess(TRUE)
+            endif
+
+        when _MOUSE_VWINDOW_, _MOUSE_HWINDOW_, _MOUSE_VRESIZE_, _MOUSE_HRESIZE_
+        /* do nothing */
+
+        when _MOUSE_CLOSE_, _NONE_
+            EndProcess(FALSE)
+        otherwise
+            ProcessHotSpot()
+    endcase
+end
+
+proc ProcessRightBtn()
+    WaitForMouseEvent(_MOUSE_RELEASE_)
+//    Set(Key, 0)           // fix bug in MenuKeys by clearing out rightbtn press...
+    EndProcess(FALSE)
+end
+
+////////////////////////////// Lister //////////////////////////////
+
+string findstr[128] = ''
+integer search_active = FALSE
+integer speedsearch_help = FALSE
+
+integer proc DecFindStr()
+    if length(findstr) <> 0
+        findstr = findstr[1:Length(findstr) - 1]
+        return (TRUE)
+    endif
+    return (FALSE)
+end
+
+integer proc FindHelpString(string findstr, string options)
+    integer p_topic
+
+    if lFind('¯'+findstr, options)
+        repeat
+            if XlatHelp(CurrPos(), TRUE, p_topic) and p_topic
+                GotoPos(p_topic)
+                return (TRUE)
+            endif
+        until not lRepeatFind()
+    endif
+    return (FALSE)
+end
+
+/***************************************************************************
+  compressed view find: Don't allow finds on the compressed view 'occurrences' line.
+ ***************************************************************************/
+integer proc FindViewFindsString(string findstr, string options)
+    PushPosition()
+    if lFind(findstr, options)
+        loop
+            if not isViewFindStr()
+                KillPosition()
+                return (TRUE)
+            endif
+            BegLine()
+            if not Down() or not lRepeatFind(_SEARCH_INCLUSIVE_)
+                break
+            endif
+        endloop
+    endif
+    PopPosition()
+    return (FALSE)
+end
+
+constant ssNONE         =   0x00,
+         ssREPEAT       =   0x01
+
+/***************************************************************************
+  Don't allow finds on the compressed view 'occurrences' line.
+ ***************************************************************************/
+integer proc FindSearchString(string find_options)
+    integer width, found
+
+    // handle help
+    if speedsearch_help
+        return (FindHelpString(findstr, find_options))
+    endif
+
+    // handle view finds display
+    if DisplayMode() == _DISPLAY_FINDS_ and GetBufferId() == Query(ViewFindsId)
+        return (FindViewFindsString(findstr, find_options))
+    endif
+
+    // regular old find - fudge tab for Loaded Macros menu
+    width = Set(TabWidth, 1)
+    found = lFind(findstr, find_options)
+    Set(TabWidth, width)
+    return (found)
+end
+
+proc SpeedSearch(integer flags)
+    string find_options[4]
+    integer save_row
+
+    if listflags & _ENABLE_SEARCH_
+
+        find_options = iif(listflags & _ANCHOR_SEARCH_, "^i", "i")
+        find_options = find_options + iif(flags & ssREPEAT, '+', 'g')
+        if (listflags & _BLOCK_SEARCH_)
+            find_options = find_options + "l"
+        endif
+
+        loop
+            search_active = TRUE
+            if Length(findstr) and FindSearchString(find_options)
+            // We need to turn off the block so updatedisplay will use proper attribute.
+                BufferVideo()
+                PushBlock()
+                UnmarkBlock()
+                save_row = CurrRow()
+                ScrollToCenter()
+                if CurrRow() <> save_row
+                    UpdateDisplay(_WINDOW_REFRESH_)
+                endif
+                _cmHiLiteFoundText(0)
+                PopBlock()
+                UnBufferVideo()
+                break
+            elseif (flags & ssREPEAT)
+                break
+            elseif not DecFindStr()
+                UpdateDisplayNoBlock(_CLINE_REFRESH_)
+                search_active = FALSE
+                break
+            endif
+        endloop
+    endif
+end
+
+proc SearchFwd(integer event)
+    if (listflags & _ENABLE_SEARCH_)
+        if isTypeableKey(Query(Key))
+            findstr = findstr + chr(Query(Key))
+            SpeedSearch(ssNONE)
+            return ()
+        else
+            search_active = TRUE    // ??? What will this mess up SEM 08/24/95 04:47 pm
+        endif
+    endif
+    ExecHook(event)
+//    removed December 10, 2003, handled in cmlprocess()
+//    NoOp()      // ExecHook(_ON_NONEDIT_UNASSIGNED_KEY_)
+end
+
+proc SearchBack()
+    DecFindStr()
+    SpeedSearch(ssNONE)
+end
+
+proc RepeatSearch()
+    SpeedSearch(ssREPEAT)
+end
+
+proc ListPrologue(integer event)
+    if not search_active
+        findstr = ''
+        if (listflags & _ENABLE_HSCROLL_) == 0
+            BegLine()
+        endif
+    endif
+    UpdateDisplayNoBlock()
+    search_active = FALSE
+    ExecHook(event)
+end
+
+proc PickPrologue(integer event)
+    if last_pos <> CurrPos()
+        Set(BorderFlags, Query(BorderFlags) | REFRESH_FOOTER)
+    endif
+    last_pos = CurrPos()
+    ListPrologue(0)
+    ExecHook(event)
+end
+
+integer proc PickStartup()
+    PushBlock()
+    MarkColumn(1, _PICKBUFFER_FNCOL_, NumLines(), _PICKBUFFER_FNCOL_ + PATHLEN)
+    SetCursorOff()
+    //EnablePromptKeys()
+    ExecHook(_PICKFILE_STARTUP_)
+    return (TRUE)
+end
+
+proc PickCleanup()
+    ExecHook(_PICKFILE_CLEANUP_)
+    PopBlock()
+end
+
+/***********************************************************************
+  Move the speed search pointer to the extension portion of the filename.
+ ***********************************************************************/
+proc PickExtension()
+    findstr = GetText(11, 10)
+    SpeedSearch(ssNONE)
+end
+
+CmdMap PickCmdMap
+    Prologue = PickPrologue(_PICKFILE_BEFORE_COMMAND_)
+    Epilogue = common_epilog(_PICKFILE_AFTER_COMMAND_)
+    Default  = SearchFwd(_PICKFILE_UNASSIGNED_KEY_)
+    Startup  = PickStartup()
+    Cleanup  = PickCleanup()
+    keydef   = ForcedKeys
+    flags    = EXCLUSIVE
+
+    [BackSpace]     SearchBack()
+    [SelfInsert]    SearchFwd(0)
+    [RepeatFind]    RepeatSearch()
+    [TabRight]      PickExtension()
+    [Down]          Down()
+    [Up]            Up()
+    [Left]          RollLeft()
+    [Right]         RollRight()
+    [ScrollDown]    ScrollDown()
+    [ScrollUp]      ScrollUp()
+    [RollDown]      RollDown2()
+    [RollUp]        RollUp2()
+    [WheelDown]     WheelDown()
+    [WheelUp]       WheelUp()
+    [PageUp]        PageUp()
+    [PageDown]      PageDown()
+    [BegFile]       BegFile()
+    [BegWindow]     BegWindow()
+    [BegLine]       BegFile()
+    [BegLineTog]    BegFile()
+    [EndFile]       EndFile()
+    [EndWindow]     EndWindow()
+    [EndLine]       EndFile()
+    [EndLineTog]    EndFile()
+    [ScrollToCenter]ScrollToCenter()
+    [ScrollToTop]   ScrollToTop()
+    [CReturn]       EndProcess(TRUE)
+    [Escape]        EndProcess(FALSE)
+    [Exit]          EndProcess(FALSE)
+
+    [lLeftBtn]      ProcessLeftBtn()
+    [lRightBtn]     ProcessRightBtn()
+
+end PickCmdMap
+
+integer roll_lock
+
+proc ListUp()
+    if (roll_lock)
+        RollUp2()
+    else
+        Up()
+    endif
+end
+
+proc ListDown()
+    if (roll_lock)
+        RollDown2()
+    else
+        Down()
+    endif
+end
+
+proc ListLeft()
+    if (listflags & _ENABLE_HSCROLL_)
+        RollLeft()
+    endif
+end
+
+proc ListRight()
+    if (listflags & _ENABLE_HSCROLL_)
+        RollRight()
+    endif
+end
+
+proc ListBegLine()
+    if (listflags & _ENABLE_HSCROLL_)
+        BegLine()
+    else
+        BegFile()
+    endif
+end
+
+proc ListEndLine()
+    if (listflags & _ENABLE_HSCROLL_)
+        EndLine()
+    else
+        EndFile()
+    endif
+end
+
+integer proc ListStartup()
+    SetCursorOff()
+    //EnablePromptKeys()
+    ExecHook(_LIST_STARTUP_)
+    return (TRUE)
+end
+
+proc ListCleanup()
+    ExecHook(_LIST_CLEANUP_)
+end
+
+CmdMap ListCmdMap
+    Prologue = ListPrologue(_LIST_BEFORE_COMMAND_)
+    Epilogue = common_epilog(_LIST_AFTER_COMMAND_)
+    Default  = SearchFwd(_LIST_UNASSIGNED_KEY_)
+    Startup  = ListStartup()
+    Cleanup  = ListCleanup()
+    KeyDef   = ForcedKeys
+    flags    = EXCLUSIVE
+
+    [RepeatFind]    RepeatSearch()
+    [BackSpace]     SearchBack()
+    [SelfInsert]    SearchFwd(0)
+    [Down]          ListDown()
+    [Up]            ListUp()
+    [ScrollDown]    ScrollDown()
+    [ScrollUp]      ScrollUp()
+    [RollDown]      RollDown2()
+    [RollUp]        RollUp2()
+    [WheelDown]     WheelDown()
+    [WheelUp]       WheelUp()
+    [Left]          ListLeft()
+    [PrevChar]      ListLeft()
+    [Right]         ListRight()
+    [NextChar]      ListRight()
+    [PageUp]        PageUp()
+    [PageDown]      PageDown()
+    [BegFile]       BegFile()
+    [BegLine]       ListBegLine()
+    [BegLineTog]      ListBegLine()
+    [BegWindow]     BegWindow()
+    [EndFile]       EndFile()
+    [EndLine]       ListEndLine()
+    [EndLineTog]      ListEndLine()
+    [EndWindow]     EndWindow()
+    [ScrollToCenter]ScrollToCenter()
+    [ScrollToTop]   ScrollToTop()
+
+    [CReturn]       EndProcess(TRUE)
+    [Escape]        EndProcess(FALSE)
+    [Exit]          EndProcess(FALSE)
+
+    // Block stuff
+    [MarkLine]      MarkLine()
+    [CopyBlock]     Copy()          // Copy not in funtab!!!
+
+    [lLeftBtn]      ProcessLeftBtn()
+    [lRightBtn]     ProcessRightBtn()
+
+end ListCmdMap
+
+/* make list flags part of LIST structure in cmdmaps */
+
+integer proc LoListInWindow(cmdmap offset, integer new_listflags)
+    integer save_listflags = listflags
+    integer flags = flDISPLAY | flVSCROLL | flEDIT | flBOX | flCLOSE
+    integer result, hilite
+
+    if (new_listflags & _ENABLE_HSCROLL_)
+        flags = flags | flHSCROLL
+    endif
+
+    PushString(findstr)
+    findstr = ''
+    speedsearch_help = FALSE
+
+    listflags = new_listflags
+    PushString(Query(ListHeader))
+    PushString(Query(ListFooter))
+    hilite = Set(ShowSyntaxHilite, off)
+
+    result = ProcessInWindow(offset, flags)
+
+    Set(ShowSyntaxHilite, hilite)
+    Set(ListFooter, PopString())
+    Set(ListHeader, PopString())
+    listflags = save_listflags
+
+    findstr      = PopString()
+
+    return (result)
+end
+
+/* internal lister with cmdmap */
+integer proc ListWindow(string title, integer width, integer height, integer new_listflags, cmdmap off)
+    integer cur_line, flags, result = FALSE, x1, y1, tmp, title_len
+
+    if not (new_listflags & FIXED_HEIGHT) and height > NumLines()
+        height = NumLines()
+    endif
+
+    title_len = Length(title) + iif(Query(MouseEnabled), 8, 2)
+    if new_listflags & FIXED_WIDTH
+        width = Max(width, title_len)
+        width = Min(width, Query(ScreenCols))
+//    else
+//        if NumLines() <= 5000 and NumLines() > 0
+//            PushLocation()
+//            tmp = LongestLineInBuffer()
+//            PopLocation()
+//            if tmp > 0
+//                width = min(tmp + 1, width)
+//            endif
+//        endif
+    endif
+
+    flags = flVSCROLL
+    if new_listflags & _ENABLE_HSCROLL_
+        flags = flags | flHSCROLL
+    endif
+
+#ifdef WIN32
+    flags = flags | flCLOSE
+#else
+    if Query(UseMouse)
+        flags = flags | flCLOSE
+    endif
+#endif
+
+    cur_line = CurrLine()
+    //PushLocation()
+
+// if we want list() non-centered
+#if 0
+    x1 = ComputeX1()
+    y1 = ComputeY1()
+    if NumFiles() == 0 or NumWindows() == 0
+        x1 = -1
+        y1 = -1
+    endif
+    if EditPopWin(title, x1, y1, width, height, Query(CurrWinBorderType), new_listflags | (flags shl 8))
+#endif
+
+    if EditPopWin(title,(Query(ScreenCols) - width) / 2 + 1, 1, width, height, Query(CurrWinBorderType), new_listflags | (flags shl 8))
+        PushString(Set(ListTitle, title))
+        result = LoListInWindow(off, new_listflags)
+        PopWinClose()
+        Set(ListTitle, PopString())
+        cur_line = CurrLine()
+    endif
+    //PopLocation()
+    GotoLine(cur_line)
+    return (result)
+end
+
+public integer proc _cmlList(string title, integer width, integer height, integer flags)
+    return (ListWindow(title, width, height, flags, ListCmdMap))
+end
+
+public integer proc _cmList(string title, integer width)
+    integer flags
+
+    flags = _ENABLE_SEARCH_
+
+    if width > Query(ScreenCols)
+        flags = flags | _ENABLE_HSCROLL_
+    endif
+    return (_cmlList(title, width, Query(ScreenRows), flags))
+end
+
+/*
+   The work file that is used is also used by the history routines.  They
+   assume that this is a system type buffer (won't lose trailing spaces).
+   We need a non-system buffer (remove trailing spaces, expand tabs on
+   display).  Save the buffer-type, and set the needed type here.  Restore
+   when done.
+ */
+integer proc ViewPublics(integer purge)
+    constant LINE_OFFSET = 250
+    integer n, width, expand, flag, saveid, id, offset, max_name_len, name_len, work_id
+
+    saveid = GotoBufferId(PUBLIC_ID)
+    work_id = GetWorkBuffer(_DONT_GOTO_BUFFER_)
+    max_name_len = 20
+    if NumLines()
+
+        n = 0
+
+        BegFile()
+        repeat
+            flag = CurrChar(PUBLIC_FLAG_OFF)
+            if (flag & PUBLIC_HIDDEN) == 0 and (not purge or (flag & PUBLIC_FLAG_FILE))
+                name_len = CurrChar(PUBLIC_NAME_LEN_OFF)
+                if (flag & PUBLIC_FLAG_FILE) == 0
+                    name_len = name_len + 2
+                endif
+                max_name_len = Max(max_name_len, name_len)
+
+                AddLine(format(chr(iif(flag & PUBLIC_FLAG_FILE, 0x20, 0x09)),
+                        GetText(PUBLIC_NAME_OFF, CurrChar(PUBLIC_NAME_LEN_OFF)):-LINE_OFFSET,
+                        CurrLine():4),work_id)
+            endif
+        until not Down()
+        GotoBufferId(work_id)
+    endif
+
+    // Don't show the .ui if no publics - don't allow it to be purged
+    EndFile()
+    if GetText(1, 4) == " .UI"
+        KillLine()
+    endif
+
+    if NumLines() == 0
+        GotoBufferId(saveid)
+        FreeWorkBuffer(work_id)
+        return (Warn(NO_MACROS_LOADED))
+    endif
+
+    BufferType(_HIDDEN_)
+    BegFile()
+    PushBlock()
+    MarkColumn(1,2,NumLines(), max_name_len)
+    width = Set(TabWidth, 4)
+    expand = Set(ExpandTabs, ON)
+
+    if _cmlList(iif(purge,PURGE_MACRO, EXECUTE_MACRO), max_name_len + 2, Query(ScreenRows),
+                   _ENABLE_SEARCH_ | _ANCHOR_SEARCH_ | _BLOCK_SEARCH_)
+        n = Val(GetText(LINE_OFFSET + 2, 4))
+    endif
+    expand = Set(ExpandTabs, expand)
+    Set(TabWidth, width)
+    PopBlock()
+
+    if n
+        GotoBufferId(PUBLIC_ID)
+        GotoLine(n)
+        id = PeekLong(AdjPtr(CurrLinePtr(), PUBLIC_ID_OFF - 1))
+        offset = PeekWord(AdjPtr(CurrLinePtr(), PUBLIC_OFFSET_OFF - 1))
+    endif
+
+    GotoBufferId(saveid)
+    FreeWorkBuffer(work_id)
+
+    if n
+        if purge
+            PurgeMacroAt(id)
+        else
+            if offset == -1
+                n = Warn(NO_MAIN)
+            else
+                // since we may be executing the main macro, clear the macro cmdline
+                Set(MacroCmdLine, "")
+                Interp(id, offset)
+            endif
+        endif
+    endif
+    return (n <> 0)
+end
+
+public integer proc _cmlPopHelp()
+    integer lock = roll_lock
+    integer result, text_color, selectattr_color
+
+    selectattr_color =  Set(MenuSelectAttr, Query(HelpTextAttr))
+    text_color =        Set(MenuTextAttr,   Query(HelpTextAttr))
+                        //Set(MenuBorderAttr, text_color)
+
+    roll_lock = TRUE
+    result = LoListInWindow(ListCmdMap, _ENABLE_HSCROLL_ | _ENABLE_SEARCH_)
+
+    roll_lock = lock
+
+    //Set(MenuBorderAttr, text_color)
+    Set(MenuTextAttr, text_color)
+    Set(MenuSelectAttr, selectattr_color)
+
+    return (result)
+end _cmlPopHelp
+
+integer viewfinds_buffer_count
+// "File: "
+constant FN_POS = 7, OCCUR_LEN = 18
+
+proc EditViewFindsFile()
+    if CurrFilename() == ""
+        ChangeCurrFilename(NewFilename("*ViewFinds buffer ", "*", viewfinds_buffer_count), _QUIET_ | _DONT_EXPAND_|_OVERWRITE_)
+    else
+        ExecHook(_ON_FIRST_EDIT_)
+        ExecHook(_ON_CHANGING_FILES_)
+    endif
+    DisplayMode(_DISPLAY_TEXT_)
+    Set(ViewFindsId, 0) // make sure a new find file is created if invoked
+    EndProcess(-1)
+end
+
+proc DelViewFinds()
+    string fn[_MAXPATH_]
+    integer id, cur_id
+
+    if isViewFindStr()
+        cur_id = GetBufferId()
+        fn = GetFileToken(GetText(FN_POS, PATHLEN), 1)
+        id = GetBufferId(fn)
+        if id == 0 or MsgBox(fn, "Unload this file?", _YES_NO_CANCEL_) == 1
+            repeat
+                KillLine()
+            until isViewFindStr() or CurrLine() > NumLines()
+            if GotoBufferId(id)
+                QuitFile()
+                GotoBufferId(cur_id)
+            endif
+        endif
+    else
+        KillLine()
+    endif
+    FileChanged(False)
+end
+
+// load files in listed, in format: File:filename
+proc LoadViewFindsFiles()
+    integer start_id, curr_id, count
+
+    start_id = GetBufferId()
+    curr_id = 0
+    count = 0
+    PushBlock()
+    PushPosition()
+
+    BegFile()
+    while lFind("File: \c", "^x")
+        MarkToEOL()
+        GotoBufferId(curr_id)
+        curr_id = AddFileToRing(GetMarkedText())
+        count = count + 1
+        GotoBufferId(start_id)
+        EndLine()
+    endwhile
+
+    PopPosition()
+    PopBlock()
+    Message(count, " File(s) loaded.")
+    EndProcess(FALSE)
+end
+
+keydef ViewKeys
+    <alt e>     EditViewFindsFile()
+    <del>       DelViewFinds()
+    <alt l>     LoadViewFindsFiles()
+end
+
+proc ViewHook()
+    if Enable(ViewKeys)
+        _cmListFooter(view_message)
+    endif
+    UnHook(ViewHook)
+end
+
+public integer proc _cmViewFinds()
+    integer id, line, buffer_type, result, width
+    string fn[PATHLEN]
+
+    if (id = GotoBufferId(Query(ViewFindsId))) <> 0
+        DisplayMode(_DISPLAY_FINDS_)
+        ScrollToRow(Query(WindowRows) / 2)
+
+        startup:
+        buffer_type = BufferType(_NORMAL_)
+
+        Hook(_LIST_STARTUP_, ViewHook)
+        if NumLines() < 10000
+            // Remove the 8 {} in the footer string
+            width = max(length(view_message) - 8, LongestLineInBuffer()) + 2
+        else
+            width = Query(ScreenCols)
+        endif
+        result = _cmlList(VIEW_FINDS, width, Query(ScreenRows), _ENABLE_SEARCH_ | _ENABLE_HSCROLL_)
+        case result
+            when 1
+                BufferType(buffer_type)
+                line = Val(GetToken(GetText(1, 16), " :", 1))
+                PushPosition()
+                while CurrLineLen() and (not isViewFindStr()) and Up()
+                endwhile
+                fn = GetFileToken(GetText(FN_POS, PATHLEN), 1)
+                PopPosition()
+
+                if fn <> '' and EditFile(QuotePath(fn))    // force on_changing_files hook
+                    if line
+                        GotoLine(line)
+                        ScrollToCenter()
+                    endif
+                    return (TRUE)
+                else
+                    goto startup
+                endif
+            when -1
+                return (TRUE)
+            otherwise
+                BufferType(buffer_type)
+                if not GotoBufferId(id) or CurrFilename() == ""
+                    NextFile()
+                endif
+        endcase
+    else
+        Warn(NO_VIEW_BUFFER)
+    endif
+    return (FALSE)
+end
+
+//////////////////////// Helper functions for Read ////////////////////////
+
+proc ClearLine()
+    BegLine()
+    _cmKillToEol()
+end
+
+//////////////////////////////////// Read /////////////////////////////////
+
+#include "bindhist.si"
+
+integer read_count = 0           // Used to control when 'default' entry is deleted
+                            // If 0, default is removed.
+integer read_edit_id
+integer sizeof_reply    // not yet recursive
+
+integer proc Read_CheckFirstKey()
+    //log(Format("Read_CheckFirstKey():"; read_count))
+    if (read_count == 0)         // First valid keypress is typeable, so remove default
+        ClearLine()
+        read_count = 1           // So we won't remove default again!
+        return (TRUE)
+    endif
+    return (FALSE)
+end
+
+proc read_backspace(integer is_backspace)
+    if not Read_CheckFirstKey()
+        if is_backspace
+            BackSpace()
+        else
+            DelChar()
+        endif
+    endif
+end
+
+proc Read_SelfInsert()
+    integer ch = Query(key) & 0xff
+
+    if (not ((Query(ReadFlags) & NUMERIC) == 0 or
+       ((ch >= asc('0') and ch <= asc('9')) or
+        (Query(ReadFlags) & PLUSMINUS and (ch == asc('+') or ch == asc('-'))))))
+        return()
+    endif
+    Read_CheckFirstKey()
+    SelfInsert()
+end
+
+proc Read_Literal()
+    integer key
+
+    key = GetKey()
+    if (HiByte(key) & _KEY_CTRL_) and (LoByte(key) in Asc('a')..Asc('z'))
+        key = key - Asc('a') + 1
+    endif
+    Set(Key, key)
+    Read_SelfInsert()
+end
+
+// SEM: 1-16-93 Epilogue not called if default is called.
+proc ReadEpilogue(integer event)
+    if CurrLineLen() > sizeof_reply
+        PushPosition()
+        gotopos(sizeof_reply + 1)
+        _cmKillToEol()
+        PopPosition()
+    endif
+    if CurrCol() > sizeof_reply
+        BegLine()
+        GotoColumn(sizeof_reply)
+    endif
+    if CurrChar() < 0
+        EndLine()
+    endif
+    read_count = read_count + 1
+    ExecHook(event)
+end
+
+/*------------------------------------------------------------------------
+  30 Mar 2020 10:34 am NoOp() used to do this.
+ ------------------------------------------------------------------------*/
+proc call_unassigned_key()
+    if QueryEditState() & _STATE_PROCESS_IN_WINDOW_
+        ExecHook(_ON_NONEDIT_UNASSIGNED_KEY_)
+    else
+        ExecHook(_ON_UNASSIGNED_KEY_)
+    endif
+end
+
+/****************************************************************************
+ This routine is used to force typeable keys (those in the range 32..126) to
+ be placed in the read buffer, even though a macro may have been assigned the
+ typeable key.
+
+ SEM 1-16-93 Note: ReadEpilogue isn't called if default is called.
+ ****************************************************************************/
+proc ReadUnknown(integer event)
+    if isTypeableKey(Query(Key))
+        Read_SelfInsert()
+        ReadEpilogue(0)
+    else
+        call_unassigned_key()
+    endif
+    ExecHook(event)
+end
+
+proc Read_CommonCopy(string s)
+    //log(Format("Read_CommonCopy(), s:"; s))
+    GotoHistoryBuffer()
+    if Length(s)
+        Read_CheckFirstKey()
+        InsertText(s)
+    endif
+end
+
+proc Read_CommonPaste()
+    BegFile()
+    Read_CommonCopy(GetText(1, CurrLineLen()))
+end
+
+proc Read_Paste()
+    GotoBufferId(Query(ClipBoardid))
+    Read_CommonPaste()
+end
+
+proc Read_PasteFromWinClip()
+    integer win_clip_id
+
+    win_clip_id = GetWorkBuffer()
+    PushBlock()
+    PasteFromWinClip()
+    PopBlock()
+    Read_CommonPaste()
+    FreeWorkBuffer(win_clip_id)
+end
+
+/*********************************************************************
+  SEM 08/20/92 06:14 pm allow block to be in non-current file, by using
+  isBlockMarked instead of isBlockMarkedInCf.
+ *********************************************************************/
+proc Read_CopyBlock()
+    //log(Format("Read_CopyBlock():", read_count))
+    if GotoBufferId(read_edit_id)
+        if BufferType() <> _SYSTEM_
+            PushBlock()
+            if isBlockMarked() or MarkWord()
+                //log("Read_CopyBlock() - calling Read_CommonCopy()")
+                Read_CommonCopy(_cmGetMarkedText())
+            endif
+            PopBlock()
+        endif
+        GotoHistoryBuffer()
+    endif
+end
+
+proc ReadPrologue(integer event)
+    if read_count
+        Set(CursorAttr,Query(MsgAttr)) //???    promptattr
+//        Set(CursorAttr,Query(TextAttr))
+        UpdateDisplay(_CLINE_REFRESH_)
+    else
+        UpdateDisplay()
+    endif
+    ExecHook(event)
+end
+
+integer proc HandleRecurseOption(var string fn, var integer pick_flags)
+    if Lower(fn[1:2]) == "-s" and (Length(fn) == 2 or fn[3] == ' ')
+        fn = Trim(DelStr(fn, 1, 3))
+        pick_flags = pick_flags | _INSERT_PATH_|_RECURSE_DIRS_
+        return (TRUE)
+    endif
+    return (FALSE)
+end
+
+//**************************** PICKDIR package *****************************
+
+string check_mark[] = chr(251)  // û
+string pick_footer[] = "{Esc}-Cancel  {Ctrl Space}-Tag  {Enter}-Select  {F10}-Menu {Alt <-}- Up"
+
+constant
+    kCOUNTEM = 0,
+    kEDITFILE = 1,
+    kDELFILE = 2
+
+string proc GetPickFileDrivePath()
+    return (GetDrivePath(Query(PickFilePath)))
+end
+
+// ??? this needs to be updated if 'where' function is used
+proc MakePickFilePathCurrent()
+    SetCurrDriveDir(GetPickFileDrivePath())
+end
+
+proc SetXYCoords()
+    Set(X1, Query(PopWinX1))
+    Set(Y1, WhereYAbs() + 1)
+end
+
+proc ToggleMark()
+    BegLine()
+    InsertText(iif(CurrChar(1) == Asc(check_mark), ' ', check_mark), _OVERWRITE_)
+end
+
+integer proc ToggleMarkDown()
+    ToggleMark()
+    return (Down())
+end
+
+integer proc GotoFirstMark()
+    return (lFind(check_mark, "^g"))
+end
+
+integer proc GotoNextMark()
+    return (lFind(check_mark, "^+"))
+end
+
+string proc PBFullPath()
+    return (iif(SlashPos(PBName()), PBName(), GetPickFileDrivePath() + PBName()))
+end
+
+integer proc DoMarks(integer f, integer num_marks)
+    integer count, deleted
+    string fn[PATHLEN]
+
+    PushPosition()
+    if not GotoFirstMark()
+        KillPosition()
+        return (0)
+    endif
+
+    count = 0
+    if f == kDELFILE
+        if num_marks > 1
+            if MsgBox("", "Delete ALL Marked Files?", _YES_NO_CANCEL_) <> 1
+                PopPosition()
+                return (0)
+            endif
+        endif
+    endif
+
+    repeat
+        if f == kCOUNTEM
+            count = count + 1
+        elseif f == kDELFILE
+            if PBAttribute() & _VOLUME_
+                Warn("Can't erase volume labels")
+            else
+                fn = PBFullPath()
+                SetXYCoords()
+                if num_marks > 1 or MsgBox("", "Delete: " + PBName(), _YES_NO_CANCEL_) == 1
+                    deleted = FALSE
+                    if (PBAttribute() & _DIRECTORY_)
+                        deleted = RmDir(fn)
+                    elseif SetFileAttr(fn, _NORMAL_)
+                        deleted = EraseDiskFile(fn)
+                    endif
+
+                    if deleted
+                        _cmKillLine()
+                        Up()
+                        count = count + 1
+                        if count mod 10 == 0
+                            UpdateDisplay()
+                        endif
+                    else
+                        Warn("Error deleting:"; PBName())
+                        break
+                    endif
+                endif
+            endif
+        endif
+    until not GotoNextMark()
+    PopPosition()
+    return (count)
+end
+
+/****************************************************************************
+   Helper routines for Sort on the Options menu.
+ ***************************************************************************/
+integer sort_flags      // used for Sorting
+
+string proc ShowSortFlag()
+    return (iif(sort_flags & 1, "Descending", "Ascending"))
+end
+
+proc ToggleSortFlag(integer which)
+    if sort_flags & which
+        sort_flags = sort_flags & ~ which
+    else
+        sort_flags = sort_flags | which
+    endif
+end
+
+/***********************************************************************
+    Sort the pick list.  This routine uses the SortMenu() to determine
+    what keys to sort on:
+
+    Option      Primary key             Secondary key           Third key
+    ------      -----------             -------------           ---------
+    NAME        Name                    Extension
+    EXTENSION   Extension               Name
+    SIZE        Size                    Name
+    DATE        Date                    Time                    Name
+    ATTRIBUTE   Attribute               Name
+    Also uses the sort_flags variable to determine order.
+***********************************************************************/
+proc SortIt(integer sortby)
+    string flags[3], key[_MAXPATH_]
+    integer y = CurrRow()
+
+    key = PBName()
+    flags = ""
+    case sortby
+        when 0  return()
+        when 1  flags = "NE"   // Name
+        when 2  flags = "EN"   // Ext
+        when 3  flags = "SN"   // Size
+        when 4  flags = "DTN"  // Date
+        when 5  flags = "AN"   // Attribute
+        when 6  flags = "PNE"  // Path
+    endcase
+    if NOT sort_flags          // Decending order?
+        flags = lower(flags)   // if so, lower case our flags
+    endif
+    Set(PickFileSortOrder, flags)  // set the sort order
+    Sort(_PICK_SORT_)
+    lFind(key, "g")
+    ScrollToRow(y)
+end
+
+menu PickSortMenu()
+    History
+    Command = SortIt(MenuOption())
+    Title = 'Sort by:'
+    "&Name"             ,,_MF_CLOSE_BEFORE_
+    "&Extension"        ,,_MF_CLOSE_BEFORE_
+    "&Size"             ,,_MF_CLOSE_BEFORE_
+    "&Date"             ,,_MF_CLOSE_BEFORE_
+    "&Attribute"        ,,_MF_CLOSE_BEFORE_
+    "&Path"             ,,_MF_CLOSE_BEFORE_
+    "", , Divide
+    "Sort &Order"   [ShowSortFlag() : 10], ToggleSortFlag(1), DontClose
+end
+
+proc PickSort()
+    SetXYCoords()
+    PickSortMenu()
+end
+
+proc PickDelFile()
+    integer toggled, num_marks = DoMarks(kCOUNTEM, 0)
+
+    toggled = FALSE
+    if num_marks == 0
+        ToggleMark()
+        num_marks = 1
+        toggled = TRUE
+    endif
+
+    if not DoMarks(kDELFILE, num_marks) and toggled
+        ToggleMark()
+    endif
+end
+
+public string proc _cmPickDrive()
+    string drivestr[PATHLEN]
+    integer cur_id, drive_id
+
+    drivestr = ""
+    cur_id = GetBufferId()
+    drive_id = GetWorkBuffer()
+
+    while _cmNextDiskConnection(drivestr, _INCLUDE_REMOVEABLE_DRIVES_)
+        AddLine(drivestr)
+    endwhile
+
+    drivestr = ""
+    BegFile()
+    lFind(GetDrive() + ':', "gi")
+    if _cmList("Select Drive", LongestLineInBuffer() + 1)
+        BegLine()
+        if isAlpha()
+            drivestr = GetDir(GetText(1, 1))
+        else
+            EndLine()
+            loop
+                if not Left()
+                    break
+                endif
+                if isWhite()
+                    Right()
+                    break
+                endif
+            endloop
+            drivestr = AddTrailingSlash("\\" + GetText(CurrPos(), sizeof(drivestr)))
+        endif
+//        Set(PickFilePath, drivestr + GetNameExt(Query(PickFilePath))) //??? redundant???
+    endif
+    GotoBufferId(cur_id)
+    FreeWorkBuffer(drive_id)
+    return (drivestr)
+end
+
+proc ChangeDrive()
+    string drivestr[PATHLEN]
+
+    drivestr = _cmPickDrive()
+    if drivestr <> ""
+        Set(PickFilePath, drivestr + GetNameExt(Query(PickFilePath)))
+        EndProcess(-1)
+    endif
+end
+
+string proc remove_last_dir(string dir0)
+    integer p
+    string dir[_MAX_PATH_] = dir0
+
+    if isDirSeparator(dir[Length(dir)])
+        dir = DelStr(dir, Length(dir), 1)
+    endif
+
+    p = Length(dir)
+    while p > 0 and (not isDirSeparator(dir[p])) and dir[p] <> ':'
+        p = p - 1
+    endwhile
+
+    if p
+        dir = dir[1..p]
+    endif
+    return (dir)
+end
+
+proc previous_dir()
+    Set(PickFilePath,
+            AddTrailingSlash(
+                remove_last_dir(
+                SplitPath(Query(PickFilePath), _DRIVE_|_PATH_))) +
+            GetNameExt(Query(PickFilePath)))
+    EndProcess(-1)
+end
+
+proc CreateDirectoryHere()
+    string path[PATHLEN] = GetPickFileDrivePath()
+    string fn[PATHLEN] = ""
+
+    if Ask("Create Directory here: [" + path + "]", fn, 0)
+        fn = Trim(fn)
+        if fn <> ""
+            MkDir(path + fn)
+            EndProcess(-1)
+        endif
+    endif
+end
+
+string PICK_MAKEFILEHERE[] = "pick_makefilehere"
+proc MakeFileHere()
+    string path[PATHLEN] = GetPickFileDrivePath()
+    string fn[PATHLEN] = ""
+
+    if Ask("Create/Save Filename here: [" + path + "]", fn, 0)
+        fn = Trim(fn)
+        if fn <> ""
+            SetBufferStr(PICK_MAKEFILEHERE, path + fn)
+            EndProcess(-2)
+        endif
+    endif
+end
+
+proc ShellHere()
+    string cur_dir[PATHLEN] = CurrDir()
+    string pick_dir[PATHLEN] = GetPickFileDrivePath()
+
+    LogDrive(pick_dir[1])
+    ChDir(pick_dir)
+    Shell()
+    LogDrive(cur_dir[1])
+    ChDir(cur_dir)
+end
+
+forward keydef pick_keys
+
+proc SmartViewFile()
+    integer id
+
+    if PBAttribute() & _DIRECTORY_
+        EndProcess(TRUE)
+        return ()
+    endif
+
+    id = GetBufferId()
+
+    Disable(pick_keys)
+    //ExecMacro("zipview " + fn) 'f' works better than zipview
+    ExecMacro("f -z " + QuotePath(PBFullPath()))
+    Enable(pick_keys)
+
+    GotoBufferId(id)
+end
+
+proc TagAllFiles()
+    PushPosition()
+    BegFile()
+    loop
+        if PBAttribute() & _DIRECTORY_
+            if not Down()
+                break
+            endif
+        elseif not ToggleMarkDown()
+            break
+        endif
+    endloop
+    PopPosition()
+end
+
+proc commonCopyFilename(integer winclip)
+    integer id
+    string fn[_MAXPATH_]
+
+    fn = PBFullPath()
+    PushBlock()
+    PushPosition()
+    id = GetWorkBuffer()
+    AddLine(fn)
+    BegLine()
+    MarkToEOL()
+    if winclip
+        CopyToWinClip()
+    else
+        Copy()
+    endif
+    PopPosition()
+    PopBlock()
+    FreeWorkBuffer(id)
+end
+
+proc mStart()
+    StartPgm(PBFullPath())
+end
+
+menu DateFormatMenu()
+    History = Query(DateFormat)
+    Command = Set(DateFormat, MenuOption())
+
+    'MM-DD-YY',,    CloseAfter
+    'DD-MM-YY',,    CloseAfter
+    'YY-MM-DD',,    CloseAfter
+    '&MM-DD-YYYY',,  CloseAfter
+    '&DD-MM-YYYY',,  CloseAfter
+    '&YYYY-MM-DD',,  CloseAfter
+    'Mon-DD-YY',,    CloseAfter
+    'DD-Mon-YY',,    CloseAfter
+    'YY-Mon-DD',,    CloseAfter
+    '&Mon-DD-YYYY',,  CloseAfter
+    '&DD-Mon-YYYY',,  CloseAfter
+    '&YYYY-Mon-DD',,  CloseAfter
+end DateFormatMenu
+
+menu TimeFormatMenu()
+    History = Query(TimeFormat)
+    Command = Set(TimeFormat, MenuOption())
+
+    '&24-hour' ,,    CloseAfter
+    '&12-hour' ,,    CloseAfter
+    '24-hour &0 fill',,    CloseAfter
+    '12-hour 0 &fill',,  CloseAfter
+end TimeFormatMenu
+
+menu PickMenu()
+    keydef = pick_keys
+
+    "&Sort  ",             PickSort()                      ,_MF_CLOSE_BEFORE_
+    "&Tag",                 ToggleMarkDown()                ,_MF_CLOSE_BEFORE_
+    "Tag &All Files",       TagAllFiles()                   ,_MF_CLOSE_BEFORE_
+
+    "", , Divide
+
+    "&Change Drive  ",     ChangeDrive()                   ,_MF_CLOSE_BEFORE_
+    "Set as Current &Working Directory", MakePickFilePathCurrent()  ,_MF_CLOSE_BEFORE_
+    "&View File",           SmartViewFile()                 ,_MF_CLOSE_BEFORE_
+    "Create/Save &File Here",MakeFileHere()                 ,_MF_CLOSE_BEFORE_
+    "C&reate Directory",    CreateDirectoryHere()           ,_MF_CLOSE_BEFORE_
+    "&Delete",              PickDelFile()                   ,_MF_CLOSE_BEFORE_
+
+    "", , Divide
+
+    "Dat&e Format"                  [MenuStr(DateFormatMenu,Query(DateFormat)):12],
+            DateFormatMenu(),
+            DontClose,
+            'Format of current date stamp'
+    "T&ime Format"                  [MenuStr(TimeFormatMenu, Query(TimeFormat)):15],
+            TimeFormatMenu(),
+            DontClose,
+            'Format of current time stamp'
+
+    "", , Divide
+
+    "C&opy Filename to Clipboard", commonCopyFilename(FALSE), _MF_CLOSE_BEFORE_
+    "Co&py Filename to Windows Clipboard", commonCopyFilename(TRUE), _MF_CLOSE_BEFORE_
+    "She&ll Here",          ShellHere()                     ,_MF_CLOSE_BEFORE_
+    "Start Current File",   mStart()                        ,_MF_CLOSE_BEFORE_
+    "E&xit",                PushKey(<Escape>)               ,_MF_CLOSE_BEFORE_
+end
+
+proc DoPickMenu()
+    SetXYCoords()
+    PickMenu()
+    UpdateDisplay()
+end
+
+keydef pick_keys
+    <alt s>             PickSort()
+    <shift SpaceBar>    ToggleMarkDown()
+    <ctrl SpaceBar>     ToggleMarkDown()
+    <del>               PickDelFile()
+    <greydel>           PickDelFile()
+    <alt f10>           ChangeDrive()
+    <f10>               DoPickMenu()
+    <ctrl v>            SmartViewFile()
+    <alt cursorleft>    previous_dir()
+    <alt cursorright>   EndProcess(TRUE)
+end
+
+proc PickDirStartup()
+    Unhook(PickDirStartup)
+    if Enable(pick_keys)
+        _cmListFooter(pick_footer)
+    endif
+    ScrollToRow(CurrLine())
+    if CurrRow() == Query(PopWinRows)
+        ScrollToCenter()
+    endif
+end
+
+// format of VISITED_DIRS_ID:  line:-6,dir
+
+public integer proc _cmPickDir(var string path, integer history, integer flags, integer recsize, integer display_mode)
+    string first_fn[_MAXPATH_]
+    string spath[_MAXPATH_], fn[_MAXPATH_]
+    integer prev_id, save_display_mode, choice, num_marked, id, dir_id, buf_id,
+        last_line, edit_file, fn_completion, width, count, bld_flags, list_flags
+
+    if Query(CodePage) <> 437
+        check_mark = '>'
+    endif
+    edit_file = flags & MULTISELECT
+    fn_completion = flags & FN_COMP
+
+    first_fn = ""
+    id = 0
+    prev_id = GetBufferId()
+
+    dir_id = GetWorkBuffer()
+    buf_id = GetWorkBuffer()
+
+    save_display_mode = DisplayMode(_DISPLAY_PICKFILE_)
+
+    spath = path
+    if not Query(PickFileChangesDir) and
+            (SplitPath(spath, _DRIVE_|_PATH_) == "" and (Query(PickFileFlags) & _SHOW_LAST_DIR_))
+        spath = SplitPath(Query(PickFilePath), _DRIVE_|_PATH_) + path
+    endif
+
+    HandleRecurseOption(spath, flags)
+
+    bld_flags = flags & (_INSERT_PATH_|_RECURSE_DIRS_)
+    loop
+        EmptyBuffer()
+        if (width = BuildPickBufferEx(spath, _DIRECTORY_ | _ARCHIVE_, bld_flags)) == 0
+            Warn(FILE_NOT_FOUND, spath)
+            break
+        endif
+
+        width = Max(width, Length(pick_footer))
+
+        spath = Query(PickFilePath)
+
+//        if bld_flags == 0
+            Sort(_PICK_SORT_)
+//        endif
+
+        last_line = 0
+        GotoBufferId(VISITED_DIRS_ID)
+        if lFind(GetDrivePath(spath), "gi$")
+            last_line = Val(GetText(1, 6))
+        endif
+        GotoBufferId(buf_id)
+
+        BegFile()
+        if last_line
+            GotoLine(last_line)
+        elseif Query(PickFileFlags) & _DIRS_AT_TOP_
+            repeat until (PBAttribute() & _DIRECTORY_) == 0 or not Down()
+            if PBAttribute() & _DIRECTORY_
+                BegFile()
+            endif
+        endif
+
+        retry:
+
+        Hook(_PICKFILE_STARTUP_, PickDirStartup)
+
+        list_flags = _ENABLE_HSCROLL_ | _ENABLE_SEARCH_ | _BLOCK_SEARCH_
+        if (flags & _RECURSE_DIRS_) == 0
+            list_flags = list_flags | _ANCHOR_SEARCH_
+        endif
+        if (choice = ListWindow(SqueezePath(spath, width), width + 2, Query(ScreenRows), list_flags, PickCmdMap)) <> 0
+            last_line = CurrLine() + 1
+            GotoBufferId(VISITED_DIRS_ID)
+            RemoveMatches(GetDrivePath(spath), "gi$")
+            AddLine(Format(last_line:-6, GetDrivePath(spath)))
+            GotoBufferId(buf_id)
+
+            spath = Query(PickFilePath)
+            fn = GetNameExt(spath)
+            if fn_completion
+                // handle names that are .ext only, e.g.: ".rc" files on linux
+                if SplitPath(spath, _NAME_) == ""
+                    fn = "*"
+                else
+                    fn = "*" + SplitPath(spath, _EXT_)
+                endif
+            endif
+
+            if choice == -1     // changed drive/directory
+                goto continue_label
+            elseif choice == -2
+                first_fn = GetBufferStr(PICK_MAKEFILEHERE)
+                goto exit_main_loop
+            endif
+
+            if (num_marked = DoMarks(kCOUNTEM, 0)) == 0
+                ToggleMark()
+                num_marked = 1
+            endif
+
+            if num_marked > 1 and not edit_file
+                Warn("Multiple marks allowed for EditFile only!")
+                goto retry
+            endif
+
+            count = 0
+            GotoFirstMark()
+            id = iif(fn_completion, read_edit_id, prev_id)
+            repeat
+                ToggleMark()
+                spath = iif(SlashPos(PBName()), PBName(), GetDrivePath(spath) + PBName())
+                if PBAttribute() & _VOLUME_
+                    Warn("Cannot Edit VOLUME LABELS")
+                elseif PBAttribute() & _DIRECTORY_
+                    count = count + 1
+                    AddLine(ExpandPath(spath + GetDirSeparator() + fn, True), dir_id)
+                else
+                    count = count + 1
+                    if Length(first_fn) == 0
+                        first_fn = spath
+                    endif
+                    if edit_file
+                        GotoBufferId(id)
+                        AddFileToRing(spath, recsize, display_mode, flags & BROWSE_MODE)
+                        id = GotoBufferId(buf_id)
+                    endif
+                endif
+            until not GotoNextMark()
+
+            if count == 0
+                goto continue_label
+            endif
+        endif
+
+        GotoBufferId(dir_id)
+        if NumLines() == 0
+            break
+        endif
+
+        GotoLine(NumLines())                // EndFile may leave us on empty last line - we need real last line
+        spath = GetText(1, CurrLineLen())
+        // Remove duplicate dir entries
+        RemoveMatches(spath, "^$gi")
+        GotoBufferId(buf_id)
+
+    continue_label:
+    endloop
+
+    exit_main_loop:
+
+    path = QuotePath(first_fn)
+    if Length(path)
+        _cmAddHistoryStr(path, history | 0x8000)    // called via PickFile
+
+        if Query(PickFileChangesDir)
+            MakePickFilePathCurrent()
+        endif
+    endif
+
+    DisplayMode(save_display_mode)
+    GotoBufferId(prev_id)
+    FreeWorkBuffer(dir_id)
+    FreeWorkBuffer(buf_id)
+    return (Length(path) <> 0)
+end
+
+public string proc _cmPickFile(string s, integer flags)
+    string path[PATHLEN]
+    path = s
+    _cmPickDir(path, 0, flags, 0, 0)
+    return (path)
+end
+
+// StripToken returns left-most token and removes token from tokenized string
+// mSR_SV_IV
+public string proc _cmStripToken(var string s, string deli, integer relax)
+    integer len,p
+    string token[255]
+
+    len = length(deli)
+
+    if relax
+        p = 1
+        while s[p:len] == deli
+            p = p + len
+        endwhile
+        s = s[p:sizeof(s)]
+    endif
+
+    p = pos(deli, s)
+    if p == 0
+        p = length(s) + 1
+    endif
+    token = s[1:p - 1]
+    s = s[p + len:sizeof(s)]
+
+    return (token)
+end
+
+// mSR
+public string proc _cmStripFileToken(var string s)
+    integer p_quote, p_space, p
+    string tok[255]
+    s = Trim(s)
+
+    p_quote = Pos('"', s)
+    p_space = Pos(' ', s)
+    if p_quote == 0 or (p_space > 0 and p_space < p_quote)
+        return (StripToken(s, ' ', true))
+    endif
+    // there is a quote, and it comes before any spaces
+
+    if p_quote > 1                  // token before quote
+        tok = s[1:p_quote-1]
+        s = DelStr(s, 1, p_quote - 1)
+        return (tok)
+    endif
+
+    // quote is at 1, so it is the first token
+
+    s = DelStr(s, 1, 1)             // remove leading quote
+    p = Pos('"', s)                 // find ending quote
+    if p == 0
+        tok = s
+        s = ""
+        return (tok)
+    endif
+    // there is a leading quoted string
+    tok = s[1: p-1]
+    s = Trim(DelStr(s, 1, p))
+    return (tok)
+end
+
+/***********************************************************************
+  Filename completion
+
+  Assumptions:
+    Called from internal ask/read.
+  Input:
+    In the 'read' buffer.
+  Output:
+    Can update the 'read' buffer.
+ ***********************************************************************/
+proc FnCompletion()
+    string path[_MAX_PATH_],   // filename built here
+        tok[_MAX_PATH_],
+        s[_MAX_PATH_]
+    integer p,              // position where we insert the expanded filename
+            pickfile_flags,
+            display_mode,
+            recsize
+
+    if (Query(ReadFlags) & FN_COMP) == 0
+        return ()
+    endif
+
+    // get current partial filename.  Handle "-bnnn fn or -h fn or -b -h fn or -b"
+
+    display_mode = 0
+    recsize = 0
+    path = Trim(GetText(1, _MAX_PATH_))
+    if not FileExists(path)
+        if path[1] <> '"'
+            loop
+                tok = GetFileToken(path, 1)
+                case Lower(tok[1:2])
+                    when "-h"
+                        display_mode = _DISPLAY_HEX_
+                        _cmStripFileToken(path)
+                    when "-b"
+                        recsize = iif(Length(tok) > 2, Min(Val(tok[3: Length(tok) - 2]), MAXLINELEN), 64)
+                        _cmStripFileToken(path)
+                    otherwise
+                        break
+                endcase
+            endloop
+        endif
+    endif
+    path = ExpandTilde(path)
+    p = Pos(path, GetText(1, _MAX_PATH_))
+
+    s = GetNameExt(path)
+    path = FixAndFindPath(path, Query(CurrHistoryList), TRUE)
+    if ExpandPath(path) <> ""
+        PushKeyStr(s)
+    endif
+    pickfile_flags = Set(PickFileFlags, Query(PickFileFlags) | _ADD_DIRS_)
+    if _cmPickDir(path, Query(CurrHistoryList), (Query(ReadFlags) & MULTISELECT) | FN_COMP, recsize, display_mode)
+        PushPosition()
+        GotoPos(p)
+        if path[1] == '"' and Left() and Chr(CurrChar()) <> '"'
+            Right()
+        endif
+        InsertText(path, _OVERWRITE_)
+        KillToEol()
+        PopPosition()
+        EndProcess(TRUE)
+    endif
+    Set(PickFileFlags, pickfile_flags)
+end
+
+integer proc ReadStartup()
+    BegLine()
+    EndLine()
+    ReadEpilogue(0)        // Truncate default (if needed) and place cursor
+    read_count = 0
+    Set(CursorAttr,iif(CurrLineLen(),Query(BlockAttr),Query(MsgAttr)))//??? promptattr
+//    Set(CursorAttr,iif(CurrLineLen(),Query(BlockAttr),Query(TextAttr)))
+    //EnablePromptKeys()
+    Set(BorderFlags, 0)
+    ExecHook(_PROMPT_STARTUP_)
+    return (TRUE)
+end
+
+proc ReadCleanup()
+    ExecHook(_PROMPT_CLEANUP_)
+end
+
+proc ReadLeftBtn()
+    if Query(MouseY) == Query(WindowY1)
+        if Query(MouseX) == Query(WindowCols) + Query(WindowX1)
+            ViewHistory(read_count)
+        else
+            EndProcess(TRUE)
+        endif
+    elseif Query(ReadFlags) & ASK_IN_USE
+        if MouseHotSpot() ==_MOUSE_CLOSE_
+            EndProcess(FALSE)
+        endif
+    endif
+end
+
+proc ReadUpDown()
+    if not ViewHistory(read_count)
+        read_count = read_count - 1
+    endif
+end
+
+proc ReadCopyToClipboard(integer to_windows, integer cutting)
+    PushBlock()
+    MarkLine()
+    if to_windows
+        CopyToWinClip()
+    else
+        Copy()
+    endif
+    PopBlock()
+    if cutting
+        BegLine()
+        KillToEol()
+    endif
+end
+
+cmdmap ReadCmdMap
+    Prologue= ReadPrologue(_PROMPT_BEFORE_COMMAND_)
+    Epilogue= ReadEpilogue(_PROMPT_AFTER_COMMAND_)
+    Default = ReadUnknown(_PROMPT_UNASSIGNED_KEY_)
+    Startup = ReadStartup()
+    Cleanup = ReadCleanup()
+    KeyDef  = ForcedKeys
+    flags   = EXCLUSIVE | ENABLE_TYPEABLES
+
+    [SelfInsert  ]  Read_SelfInsert()
+    [KBDMacroBegin] KBDMacroBegin() read_count = read_count - 1
+    [Literal     ]  Read_Literal()
+    [Down        ]  ReadUpDown()
+    [Up          ]  ReadUpDown()
+
+    [WordRight   ]  if CurrPos() <= PosLastNonWhite() WordRight() endif
+    [WordLeft    ]  WordLeft()      // can't wrap since 1st line of file
+
+    [PrevChar    ]  Left()
+    [Left        ]  Left()
+
+    [Right       ]  Right()
+    [NextChar    ]  Right()
+
+    [ToggleInsert]  ToggleInsert()
+    [BackSpace   ]  read_backspace(1)
+    [DelChar     ]  read_backspace(0)
+    [DelCharOrBlock]DelCharOrBlock()
+    [BegLine     ]  BegLine()
+    [EndLine     ]  EndLine()
+    [BegLineTog  ]  BegLine()
+    [EndLineTog  ]  EndLine()
+
+    [CopyBlock   ]  Read_CopyBlock()
+    [Copy        ]  ReadCopyToClipboard(FALSE, FALSE)
+    [CopyToWinClip] ReadCopyToClipboard(TRUE,  FALSE)
+    [Cut         ]  ReadCopyToClipboard(FALSE, TRUE)
+    [CutToWinClip]  ReadCopyToClipboard(TRUE,  TRUE)
+    [Paste       ]  Read_Paste()
+    [PasteReplace]  Read_Paste()
+    [PasteFromWinClip] Read_PasteFromWinClip()
+    [PasteReplaceFromWinClip] Read_PasteFromWinClip()
+
+    [DelToEol    ]  _cmKillToEol()
+    [DelRightWord]  _cmDelRightWord()
+    [DelLeftWord ]  _cmDelLeftWord()
+
+    [DelLine     ]  ClearLine()
+    [TabRight    ]  FnCompletion()
+    [CReturn     ]  EndProcess(TRUE)
+    [Escape      ]  EndProcess(FALSE)
+    [Exit        ]  EndProcess(FALSE)
+
+    [lLeftBtn    ]  ReadLeftBtn()
+    [lRightBtn]     ProcessRightBtn()
+    [Help        ]  Help(Query(PromptString))
+    [NoOp        ]  call_unassigned_key()  read_count = read_count - 1 // ignore unassigned keys
+end
+
+integer proc _ReadPopWin(var string save_video, integer maxlen)
+    integer x1, x2, tmp
+
+    if sizeof(save_video) < _SIZEOF_VIDEO_
+        return (FALSE)
+    endif
+
+    tmp = Query(PopWinX1) + Query(PopWinCols) - 1
+    if (x2 = (x1 = VWhereX() + Query(PopWinX1) - 1) + maxlen - 1) > tmp
+        x2 = tmp
+    endif
+    SaveVideoWindow(save_video)
+    Window(x1, VWhereY() + Query(PopWinY1) - 1, x2, VWhereY() + Query(PopWinY1) - 1)
+    return (TRUE)
+end
+
+proc _ReadCloseWin(var string save_video)
+    RestoreVideoWindow(save_video)
+end
+
+// return FALSE if a valid string
+// return TRUE if flags is NUMERIC/NUMERIC2 and string is not of the pattern:
+// "^ *{[+-]}?[0-9]+ *$"
+// In other words:
+// 0 or more spaces, optionally followed by + or -,
+// 1 or more digits, followed by 0 or more spaces
+// only accepts base 10 strings
+integer proc isReplyBogus(string s, integer flags)
+    return ((flags & (NUMERIC|NUMERIC2)) and (StrFind("^ *{[+-]}?[0-9]+ *$", s, "x") == 0))
+end
+
+integer read_busy
+integer proc loRead(var string reply, integer history, integer read_flags)
+    integer exit_code, save_cursor, save_history_no, save_flags,
+        save_line, save_pos, save_xoffset
+    string save_video[_SIZEOF_VIDEO_] = ''
+
+    exit_code = 0
+    if _ReadPopWin(save_video, sizeof(reply))
+
+        read_busy = read_busy + 1
+        Set(ReadInUse, read_busy)
+        save_history_no = Set(CurrHistoryList, history)
+        PushPosition()
+
+        read_edit_id = GotoHistoryBuffer()
+
+        save_line = CurrLine()
+        save_pos = CurrPos()
+        save_xoffset = CurrXOffset()
+        if save_line == 1
+            PushString(GetText(1, CurrLineLen()))
+        endif
+
+        sizeof_reply = sizeof(reply)    // not yet recursive
+        if isReplyBogus(reply, read_flags) or Length(reply) > sizeof(reply) or Length(reply) < 0
+            reply = ''
+        endif
+
+        BegFile()
+        ClearLine()
+
+        InsertText(iif(Length(reply), reply, _cmGetHistoryStr(history, 1)))
+
+        save_cursor = SetCursorOn()
+
+        save_flags = Set(ReadFlags, read_flags)
+
+        exit_code = ProcessInWindow(ReadCmdMap, flEDIT|flREAD|flBOX|flCLOSE)
+        Set(ReadFlags, save_flags)
+
+        Set(Cursor, save_cursor)
+
+        if exit_code
+            reply = GetText(1, sizeof(reply))
+            if read_flags & TRIM_SPACES
+                reply = Trim(reply)
+            endif
+            if isReplyBogus(reply, read_flags)
+                reply = ''
+            else
+                _cmAddHistoryStr(reply, history)
+            endif
+        endif
+
+        GotoLine(save_line)
+        if save_line == 1
+            ClearLine()
+            InsertText(PopString())
+        endif
+        GotoPos(save_pos)
+        GotoXoffset(save_xoffset)
+
+        PopPosition()
+        _ReadCloseWin(save_video)
+        read_busy = read_busy - 1
+        if read_busy
+            Set(CurrHistoryList, save_history_no)
+        endif
+        Set(ReadInUse, read_busy)
+    endif
+
+    return (exit_code)
+end
+
+/* ???X??? need video function in which you pass offset within video struct */
+
+public integer proc _cmRead(var string reply, integer history)
+    return (loRead(reply, history, 0))
+end
+
+public integer proc _cmReadNumeric(var string reply, integer history)
+    return (loRead(reply, history, NUMERIC2))
+end
+
+integer proc loAsk(string prompt_string, var string reply, integer history, integer read_flags)
+    integer attr   = Set(Attr, Query(MsgAttr))
+    integer result = FALSE
+    integer maxlen
+    string dir[_MAXPATH_]
+
+    maxlen = Max(Length(prompt_string), sizeof(reply))
+    if maxlen > 77
+        maxlen = 77
+    endif
+
+    if AskPopWin(maxlen)
+        ClrScr()
+        PutStr(prompt_string)
+        if read_flags & SHOWDIR
+            dir = CurrDir()
+            if history <> _DOS_HISTORY_ and
+                    Query(PickFileChangesDir) == FALSE and
+                    (Query(PickFileFlags) & _SHOW_LAST_DIR_) and
+                    Query(PickFilePath) <> ""
+                dir = SplitPath(Query(PickFilePath), _DRIVE_|_PATH_)
+            endif
+            PutStr(Format(" [", SqueezePath(dir, _USE_HOME_PATH_), "]"))
+
+        endif
+        VGotoXY(1, 2)
+        PushString(Set(PromptString, "Prompt->"+prompt_string))
+        read_flags = Set(ReadFlags, read_flags)
+        result = loRead(reply, history, Query(ReadFlags) | ASK_IN_USE)
+        Set(ReadFlags, read_flags)
+        Set(PromptString, PopString())
+        PopWinClose()
+    endif
+    Set(Attr, attr)
+    return (result)
+end
+
+public integer proc _cmAsk(string prompt_string, var string reply, integer history)
+    return (loAsk(prompt_string, reply, history, Query(ReadFlags)))
+end
+
+public integer proc _cmAskNumeric(string prompt_string, var string reply, integer history)
+    return (loAsk(prompt_string, reply, history, NUMERIC2))
+end
+
+/***************************************************************************
+  Prompt for a filename, with FnCompletion.
+  extras include:
+    Automatic trimming
+    flags: MUST_EXIST WRITE_ACCESS
+
+ ***************************************************************************/
+public integer proc _cmAskFilename(string prompt, var string fn, integer flags, integer history)
+    string path[PATHLEN], fn0[PATHLEN]
+    integer attribute, wild, pick_flags
+
+    while loAsk(prompt, fn, history, FN_COMP | TRIM_SPACES | SHOWDIR | flags)
+        pick_flags = 0
+        fn0 = fn
+        fn = ExpandTilde(fn)
+        wild = FALSE
+        if history in _EXECMACRO_HISTORY_, _LOADMACRO_HISTORY_, _KEYMACRO_HISTORY_
+            path = FixAndFindPath(fn, history)
+            if Length(path) == 0 and Length(Trim(fn)) == 0
+                path = "*." + iif(history == _KEYMACRO_HISTORY_, "kbd", "mac")
+            endif
+            if history == _KEYMACRO_HISTORY_ and Length(GetDrivePath(path)) == 0
+                path = Query(KbdPath) + path
+            endif
+        else
+            if HandleRecurseOption(fn, pick_flags)
+                path = fn
+                if path == ""
+                    path = "*.*"
+                endif
+                wild = TRUE
+            else
+                path = ExpandPath(fn, TRUE)
+            endif
+            path = UserEnteredCase(fn, path)
+        endif
+
+        if Length(path) == 0
+            BogusFilename(fn)
+        else
+            wild = wild or isWildPath(path)
+            if (wild and _cmPickDir(path, history, pick_flags, 0, 0)) or not wild
+            // At this point, we have a non-ambiguous filename
+            // if flags == 0, just return with fn.
+                if flags
+                    attribute = FileExists(path)
+                endif
+
+                if (flags & _MUST_EXIST_) and attribute == 0
+                    Warn(FILE_NOT_FOUND, path)
+                elseif (flags & _WRITE_ACCESS_) and (attribute & _READONLY_)
+                    Warn(ACCESS_DENIED, path)
+                else
+                    if wild or (flags & _FULL_PATH_) or (not EquiStr(CurrDir(), GetDrivePath(path)))
+                        fn = path
+                    endif
+                    return (TRUE)
+                endif
+            endif
+        endif
+        fn = fn0
+    endwhile
+    return (FALSE)
+end
+
+string
+    text_delim[] = ';',
+    quick_char[] = '&'
+
+integer proc MenuTextWidth(string menu_text)
+    integer num_choices
+
+    num_choices = NumTokens(menu_text, text_delim)
+    return (2 + Length(menu_text) - StrCount(text_delim, menu_text) - StrCount(quick_char, menu_text) + num_choices - 1)
+end
+
+/**************************************************************************
+  05/22/2002 SEM - don't allow space bar to do anything!
+ **************************************************************************/
+integer proc DoMenuBar(integer x, integer y, integer initial_choice, string menu_text)
+    constant MAX_ITEMS = 60
+    integer p, i, nitems, choice, attr, key, mx, my, clicked, p_x, p_y
+    string s[80], first_keys[MAX_ITEMS], item_start[MAX_ITEMS], item_len[MAX_ITEMS]
+
+    first_keys = Format(Chr(0):255)
+    choice = initial_choice
+    nitems = NumTokens(menu_text, text_delim)
+    loop
+        if choice < 1
+            choice = nitems
+        elseif choice > nitems
+            choice = 1
+        endif
+
+        BufferVideo()
+        VGotoxy(x, y)
+        for i = 1 to nitems
+            attr = iif(i == choice, Query(MenuSelectAttr), Query(MenuTextAttr))
+            s = GetToken(menu_text, text_delim, i)
+            p = Pos(quick_char, s)
+            item_start[i] = Chr(VWhereX())
+            item_len[i] = Chr(Length(s) + iif(p == 0, 0, -1))
+            if p == 0
+                PutStr(s, attr)
+            else
+                first_keys[i] = Lower(s[p + 1])
+                if i == choice
+                    p_x = VWhereX()
+                    p_y = VWhereY()
+                endif
+                PutStr(s[1:p - 1], attr)
+                PutStr(s[p + 1], iif(i == choice, Query(MenuSelectLtrAttr), Query(MenuTextLtrAttr)))
+                PutStr(s[p + 2:255], attr)
+            endif
+            if i < nitems
+                PutStr(' ', Query(MenuTextAttr))
+            endif
+        endfor
+        GotoXY(p_x, p_y)
+        UnBufferVideo()
+
+        key = GetKey(_EQUATE_ENHANCED_KBD_|_LOWERCASE_KBD_)
+        case key
+            when <CursorLeft>, <CursorUp>, <Shift Tab>
+                choice = choice - 1
+            when <CursorRight>, <CursorDown>, <Tab>
+                choice = choice + 1
+            when <Enter>, <Spacebar>
+                break
+            when <Escape>
+                choice = 0
+                break
+            when <LeftBtn>
+                mx = Query(MouseX)
+                my = Query(MouseY)
+                if (QueryEditState() & _STATE_PROCESS_IN_WINDOW_) == 0
+                    mx = Query(MouseX) - Query(PopWinX1) + 1
+                    my = Query(MouseY) - Query(PopWinY1) + 1
+                endif
+//                Warn("mx/my"; mx; my;
+//                    "x/y"; x; y; "wxa/wya";
+//                    "px1/py1"; Query(PopWinX1); Query(PopWinY1);
+//                    QueryEditState():8:' ':16)
+                if my == y
+                    clicked = FALSE
+                    for i = 1 to nitems
+                        if mx in Asc(item_start[i])..Asc(item_start[i]) + Asc(item_len[i]) - 1
+                            choice = i
+                            clicked = TRUE
+                            break
+                        endif
+                    endfor
+                    if clicked
+                        break
+                    endif
+                endif
+            otherwise
+                if isTypeableKey(key)
+                    p = Pos(Chr(key), first_keys)
+                    if p
+                        choice = p
+                        break
+                    endif
+                endif
+        endcase
+    endloop
+
+    // see if they really pressed 'cancel'
+    if choice == nitems
+        s = GetToken(menu_text, text_delim, choice)
+        i = 1
+        while i <= Length(s)
+            if s[i] in '&','[',']','(',')',' ','_'
+                s = DelStr(s, i, 1)
+            else
+                i = i + 1
+            endif
+        endwhile
+        if EquiStr(s, "cancel")
+            choice = 0
+        endif
+    endif
+
+    return (choice)
+end
+
+/*------------------------------------------------------------------------
+cmMsgBox()
+    cmMsgBoxEx()
+
+cmMsgBoxEx()
+    MsgBoxEx2()
+
+cmMsgBoxBuffer()
+    MsgBoxEx2()
+
+MsgBoxEx2()
+    MsgBoxFinish()
+        MsgBoxBuff2()
+ ------------------------------------------------------------------------*/
+
+// take care in screen centering calculations. Note that EditPopWin adds 2 for box
+integer proc MsgBoxBuff2(string title, string menu_text, integer id, integer x1, integer y1)
+    integer y, x, width, height, prompt_string_len, choice, cursor, attr, menu_len
+
+    attr = Query(Attr)
+    id = GotoBufferId(id)
+    PushPosition()
+
+    cursor = SetCursorOff()
+
+    menu_len = MenuTextWidth(menu_text)
+    prompt_string_len = Max(menu_len, Length(title) + 2)
+
+    BegFile()
+    width = Max(LongestLineInBuffer() + 2, prompt_string_len)
+    height = NumLines() + (Length(title) <> 0) + 3
+
+    // (cols / 2) - (w / 2) + (even(w) or Odd(cols))
+
+    // oldest
+    //x1 = (Query(ScreenCols) / 2) - ((width + 2) / 2) + (Odd(width) == FALSE or Odd(Query(ScreenCols)))
+    //y1 = (Query(ScreenRows) / 2) - (height / 2)
+
+    // next
+    //x1 = (Query(ScreenCols) / 2) - ((width + 2) / 2) - 3
+    //y1 = (Query(ScreenRows) / 2) - (height / 2) - 3
+
+    //x1 = Query(WindowX1) + (CurrX() / 2)
+    //y1 = Query(WindowY1) + (CurrRow() / 2)
+
+//    BufferVideo()
+//    if PopWinOpen(x1, y1, x1 + width, y1 + height, 1, title, Query(MenuBorderAttr))
+// EditPopWin buffers the video
+    if EditPopWin(title, x1, y1, width, height, 1, 0)
+        Set(Attr, Query(MenuTextAttr))
+        ClrScr()
+        y = 1 + (Length(title) <> 0)
+        repeat
+            PutStrXY(2, y, GetText(1, CurrLineLen()))
+            y = y + 1
+        until not Down()
+        y = y + 1
+        x = ((Query(PopWinCols) / 2) - (menu_len / 2)) + 1
+
+        choice = DoMenuBar(x + 1, y, 1, menu_text)
+
+        PopWinClose()
+    endif
+    UnBufferVideo()
+    if cursor
+        SetCursorOn()
+    endif
+
+    PopPosition()
+    GotoBufferId(id)
+    Set(Attr, attr)
+    return (choice)
+end
+
+integer proc MsgBoxFinish(string title, string menu_text, integer save_id, integer work_id, integer mb_id, integer x1, integer y1)
+    integer choice
+
+    choice = MsgBoxBuff2(title, menu_text, 0, x1, y1)
+
+    GotoBufferId(save_id)
+    if mb_id == 0
+        FreeWorkBuffer(work_id)
+    endif
+    return (choice)
+end
+
+integer proc MsgBoxEx2(string title, string text, string menu_text, integer mb_id, integer user_wrap, integer x1, integer y1)
+    integer save_id, work_id, right_margin, save_right_margin, max_width, ll_width, buffer_type
+
+    if x1 == 0
+        x1 = ComputeX1()
+    endif
+    if y1 == 0
+        y1 = ComputeY1()
+    endif
+
+    save_id = GetBufferId()
+    if mb_id == 0
+        work_id = GetWorkBuffer()
+        InsertText(text)
+    else
+        work_id = mb_id
+        GotoBufferid(mb_id)
+    endif
+
+    ll_width = LongestLineInBuffer()
+
+    max_width = Query(ScreenCols) - 4
+    right_margin = Max(ll_width, Max(Length(title), MenuTextWidth(menu_text) - 2))
+    right_margin = Min(right_margin, max_width)
+
+    save_right_margin = Set(RightMargin, right_margin)
+
+    // Now wrap between our boundaries
+    buffer_type = BufferType(_NORMAL_)
+    BegFile()
+    loop
+        if CurrChar() == WRAP_CHAR
+            DelChar()
+            SplitLine()
+            Down()
+            BegLine()
+        elseif CurrCol() > right_margin
+            PushLocation()
+            if user_wrap
+                WrapLine()
+            else
+                WrapPara()
+            endif
+            PopLocation()
+            if CurrLineLen() > right_margin
+                GotoColumn(right_margin + 1)
+                SplitLine()
+            endif
+            if not Down()
+                break
+            endif
+            BegLine()
+        elseif CurrChar() < 0
+            if not Down()
+                break
+            endif
+            BegLine()
+        else
+            Right()
+        endif
+    endloop
+    BufferType(buffer_type)
+
+    Set(RightMargin, save_right_margin)
+
+    return (MsgBoxFinish(title, menu_text, save_id, work_id, mb_id, x1, y1))
+end
+
+public integer proc _cmMsgBoxEx(string title, string text, string menu_text)
+    return (MsgBoxEx2(title, text, menu_text, 0, FALSE, 0, 0))
+end
+
+string proc DecodeChoiceType(integer type)
+    case type
+        when _YES_NO_CANCEL_ return ("[ &Yes ];[ &No ];[&Cancel]")
+        when _YES_NO_        return ("[ &Yes ];[ &No ]")
+    endcase
+    return ("[ &OK ]")
+end
+
+/**************************************************************************
+  MsgBox returns FALSE if default type is passed
+
+  If just MsgBox("text") entered, handle it.
+ **************************************************************************/
+public integer proc _cmMsgBox(string title, string text, integer type)
+    integer choice
+
+    if text == "" and type == 0
+        choice = _cmMsgBoxEx(text, title, DecodeChoiceType(type))
+    else
+        choice = _cmMsgBoxEx(title, text, DecodeChoiceType(type))
+    endif
+    return (iif(type == 0, FALSE, choice))
+end
+
+public integer proc _cmMsgBoxBuff(string title, integer type, integer buf_id)
+    integer choice, user_wrap, work_id, x1, y1
+
+    user_wrap = FALSE
+    if type & 0x8
+        user_wrap = TRUE
+        type = type & ~(0x8)     // turns off 0x8
+    endif
+
+    x1 = ComputeX1()
+    y1 = ComputeY1()
+
+    PushLocation()
+
+    if buf_id == 0
+        buf_id = GetBufferId()
+    else
+        GotoBufferId(buf_id)
+    endif
+
+    PushBlock()
+    MarkAll()
+    work_id = GetWorkBuffer()
+    CopyBlock()
+    PopBlock()
+    choice = MsgBoxEx2(title,  "", DecodeChoiceType(type), work_id, user_wrap, x1, y1)
+
+    PopLocation()
+    FreeWorkBuffer(work_id)
+    return (iif(type == 0, FALSE, choice))
+end

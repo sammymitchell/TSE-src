@@ -1,0 +1,293 @@
+/***********************************************************************
+   Line Drawing module
+
+   1989     Sammy Mitchell - Original code in C (based on code in
+                    PC MAG and code in Turbo Basic Editor Toolbox)
+   1990     Steve Watkins  - rewrite
+   1991     Steve Watkins  - converted to QML
+   1992     Sammy Mitchell - Add user-area LineDrawType and UdLdC
+                             (in lieu of LineType and udbdc)
+ ***********************************************************************/
+
+constant cBLANK         = 0x20,
+         cGRAPHICSBASE  = asc('Ё') - 1
+
+constant ASCII_SET  =   5,
+         ERASER     =   6,
+         USERCHAR   =   7
+
+string graphics_attr[] =
+    chr(0x11)+    //   Ё   00010001
+    chr(0x15)+    //   ╢   00010101
+    chr(0x1d)+    //   ╣   00011101
+    chr(0x37)+    //   ╤   00110111
+    chr(0x07)+    //   ╥   00000111
+    chr(0x0d)+    //   ╦   00001101
+    chr(0x3f)+    //   ╧   00111111
+    chr(0x33)+    //   ╨   00110011
+    chr(0x0f)+    //   ╩   00001111
+    chr(0x3c)+    //   ╪   00111100
+    chr(0x34)+    //   ╫   00110100
+    chr(0x1c)+    //   ╬   00011100
+    chr(0x05)+    //   ©   00000101
+    chr(0x50)+    //   ю   01010000
+    chr(0x54)+    //   а   01010100
+    chr(0x45)+    //   б   01000101
+    chr(0x51)+    //   ц   01010001
+    chr(0x44)+    //   д   01000100
+    chr(0x55)+    //   е   01010101
+    chr(0xd1)+    //   ф   11010001
+    chr(0x73)+    //   г   01110011
+    chr(0xf0)+    //   х   11110000
+    chr(0xc3)+    //   и   11000011
+    chr(0xfc)+    //   й   11111100
+    chr(0xcf)+    //   к   11001111
+    chr(0xf3)+    //   л   11110011
+    chr(0xcc)+    //   м   11001100
+    chr(0xff)+    //   н   11111111
+    chr(0xdc)+    //   о   11011100
+    chr(0x74)+    //   п   01110100
+    chr(0xcd)+    //   я   11001101
+    chr(0x47)+    //   р   01000111
+    chr(0x70)+    //   с   01110000
+    chr(0xd0)+    //   т   11010000
+    chr(0xc1)+    //   у   11000001
+    chr(0x43)+    //   ж   01000011
+    chr(0x77)+    //   в   01110111
+    chr(0xdd)+    //   ь   11011101
+    chr(0x14)+    //   ы   00010100
+    chr(0x41)     //   з   01000001
+
+string graphics_to_ascii[] =
+
+    '|'+          //   Ё
+
+    '+'+          //   ╢
+
+    '+'+          //   ╣
+
+    '|'+          //   ╤
+
+    '+'+          //   ╥
+
+    '+'+          //   ╦
+
+    '+'+          //   ╧
+
+    '|'+          //   ╨
+
+    '+'+          //   ╩
+
+    '+'+          //   ╪
+
+    '+'+          //   ╫
+
+    '+'+          //   ╬
+
+    '+'+          //   ©
+
+    '+'+          //   ю
+
+    '+'+          //   а
+
+    '+'+          //   б
+
+    '+'+          //   ц
+
+    '-'+          //   д
+
+    '+'+          //   е
+
+    '+'+          //   ф
+
+    '|'+          //   г
+
+    '+'+          //   х
+
+    '+'+          //   и
+
+    '+'+          //   й
+
+    '+'+          //   к
+
+    '+'+          //   л
+
+    '-'+          //   м
+
+    '+'+          //   н
+
+    '+'+          //   о
+
+    '+'+          //   п
+
+    '+'+          //   я
+
+    '+'+          //   р
+
+    '+'+          //   с
+
+    '+'+          //   т
+
+    '+'+          //   у
+
+    '+'+          //   ж
+
+    '+'+          //   в
+
+    '+'+          //   ь
+
+    '+'+          //   ы
+
+    '+'           //   з
+
+string lineset_table[] = chr(0x55)+chr(0xdd)+chr(0x77)+chr(0xff)+chr(0x55)
+
+string mask1[4] = chr(0xf3) + chr(0x3f) + chr(0xcf) + chr(0xfc)
+string mask2[4] = chr(0xc0) + chr(0x0c) + chr(0x03) + chr(0x30)
+string mask3[4] = chr(0xcc) + chr(0xcc) + chr(0x33) + chr(0x33)
+
+integer proc LookupLineChar( integer n )
+    return ( pos(chr(n),graphics_attr) )
+end
+
+integer proc AttrOfCurrChar()
+    if Query(LineDrawType) == ASCII_SET
+        case CurrChar()
+            when asc('-')   return (0x44)
+            when asc('+')   return (0x55)
+            when asc('|')   return (0x11)
+        endcase
+    elseif ( CurrChar() >= asc('Ё') and CurrChar() <= asc('з') )
+        return (asc(graphics_attr[CurrChar()-cGRAPHICSBASE]))
+    endif
+    return (0)
+end
+
+integer proc LeftRightUpDown(integer n)
+    case n
+        when 1
+            return (Left())
+        when 2
+            return (Right())
+        when 3
+            return (Up())
+        when 4
+            return (Down())
+    endcase
+    return (FALSE)
+end
+
+public proc _cmLineDraw(integer LineCode)
+    integer i,
+            ch,
+            bitmap,
+            lineset,
+            save_tab_type
+
+    lineset = asc(lineset_table[Query(LineDrawType)])
+    if Query(LineDrawType) <= ASCII_SET
+
+        // read adjacent characters
+        bitmap = 0
+
+        i = 1
+        repeat
+            PushPosition()
+            if LeftRightUpDown(i)
+                bitmap = bitmap | (AttrOfCurrChar() & asc(mask2[i]))
+            endif
+            PopPosition()
+            i = i + 1
+        until i == 5
+
+        // transpose pattern and define direction bits
+
+        bitmap = ( ((( bitmap shr 4 ) | ( bitmap shl 4 )) & asc(mask1[LineCode])) | (lineset & ~(asc(mask1[LineCode]))) )
+
+        //                      CONFLICT RESOLUTION:
+        //
+        //  (1) If the mapped character cannot be found (bitmap),
+        //  (2)   attempt to match a character which mirrors the current
+        //        direction (bitmap & ~mask2[LineCode]) | (lineset & mask2[LineCode])
+        //  (3)   If a match is still not found then attempt to match a
+        //        character whose SINGLE/DOUBLE attributes are forced to
+        //        the current setting.  If this fails look up the current
+        //        type intersect character which is "lineset".
+
+        ch = LookupLineChar(bitmap)
+        if (ch == 0)
+            ch = LookupLineChar((bitmap & ~asc(mask2[LineCode]) ) | (lineset & asc(mask2[LineCode])))
+            if ( ch == 0 )
+                ch = LookupLineChar(lineset & asc(mask3[LineCode]))
+                if ( ch == 0 )
+                    ch = LookupLineChar(lineset)
+                endif
+            endif
+        endif
+        ch = iif(Query(LineDrawType) < ASCII_SET, ch + cGRAPHICSBASE, asc(graphics_to_ascii[ch]))
+    else
+        ch = iif(Query(LineDrawType) == ERASER, cBLANK, Query(LineDrawChar))
+    endif
+
+    PushPosition()
+    save_tab_type = Set(TabType, _SOFT_)
+    if CurrChar() == 0x09
+        PushPosition()
+        InsertText(Format(' ':DistanceToTab(1) - 1), _INSERT_)
+        InsertText(' ', _OVERWRITE_)
+        PopPosition()
+    endif
+	InsertText(chr(ch), _OVERWRITE_)
+	Set(TabType, save_tab_type)
+    PopPosition()
+
+    if not LeftRightUpDown(LineCode) and LineCode == _DOWN_
+        AddLine()
+    endif
+
+end
+
+proc SetLineDrawChar()    // User-Definable Line Draw Character
+    string linedrawchar[1] = chr(Query(LineDrawChar))
+    if _cmRead(linedrawchar, 0)
+        Set(LineDrawChar, asc(linedrawchar))
+        Set(LineDrawType, 7)
+    endif
+end
+
+Menu _LineTypeMenu()
+    history = Query(LineDrawType)
+    command = Set(LineDrawType, MenuOption())
+
+    "&Single      зд©"  ,   ,   CloseBefore
+    "Double &Top  ум╦"  ,   ,   CloseBefore
+    "Dou&ble Side жд╥"  ,   ,   CloseBefore
+    "&Double Both им╩"  ,   ,   CloseBefore
+    "&ASCII       +-|"  ,   ,   CloseBefore
+    "&Eraser"           ,   ,   CloseBefore
+    "&User-defined" [chr(Query(LineDrawChar)):1],
+                    SetLineDrawChar(), CloseAfter
+end
+
+Public proc _cmLineTypeMenu()
+    _LineTypeMenu()
+end
+
+KeyDef LineKeys
+    <CursorRight>       _cmLineDraw(_Right_)
+    <GreyCursorRight>   _cmLineDraw(_Right_)
+    <CursorLeft>        _cmLineDraw(_Left_)
+    <GreyCursorLeft>    _cmLineDraw(_Left_)
+    <CursorUp>          _cmLineDraw(_Up_)
+    <GreyCursorUp>      _cmLineDraw(_Up_)
+    <CursorDown>        _cmLineDraw(_Down_)
+    <GreyCursorDown>    _cmLineDraw(_Down_)
+end LineKeys
+
+Public proc _cmToggleLineDraw()
+    if Query(LineDrawing)
+        Enable(LineKeys)
+    else
+        Disable(LineKeys)
+    endif
+end _cmToggleLineDraw

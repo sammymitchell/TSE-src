@@ -1,0 +1,1604 @@
+// fn%topic#subtopic to {fn|topic;subtopic}
+
+//remove WARNS()
+
+// use CmpStr() stuff
+
+// fix INDEX_STYLE stuff (use index_flags... verify index_flags)
+// make sure this works... optimize #subtopic to just search in current topic
+
+// index_style needs to be specified in TABLE OF CONTENTS
+
+// put columnar stuff in where appropriate
+
+// change # to ; in topics so we can use # as a line number
+
+// rework $ & , etc to use ndxFlags
+//  put info in index file instead of separate topic (could be done later easily)
+
+// check out filename stuff (in compile)
+
+// Infoboxes at bottom of screen don't display properly (nit)
+
+// mouse is off 1 column (nit)
+// fix replacable text in compile.txt
+
+// fix recursive link ®B¯ ®- ®S¯ THIS SHOULD BE IGNORED ®/S¯ -¯ BOLD ®/B¯
+// fix speedsearch hilite and index
+
+/* L    - Link
+   LI   - Glossary      (make LI)
+
+   B    - Bold
+   I    - Italics
+
+   #    - numeric replacement
+   -    - comment
+*/
+
+// columnar stuff (index_style) is badly broken now that we have redirected links
+// we need to Go to each link and col (converted to Position)
+// search
+// determine the column
+// see if the column is within the guide (+/- 5 or so)
+
+// fix COLUMNAR stuff index_style is broken
+
+// fix JustTopic() to remove filename if it exists or pass flag when needing to remove it
+
+//fix CleanedUpTopic() to handle <&xxx>
+
+// add cmpstr() stuff
+
+// mouse is broken......FIX IT.  can't click on topics
+
+// need explanation of ExternalHelp
+
+// need to add previous_subtopic if we're gonna maintain separate previous_topic and previous_fn
+
+// if you pull up help -on-help after topic not found the buffer has not been emptied
+
+// fix compile.hlp file
+
+// Help does not currently work with multiple files
+
+//??? what about NEXT topic when ALL hasn't been specified???
+
+string  LinkSearch[]    = '®L{[~{}]*}{\{{.*}\}}?¯{.*}®/L¯'
+#define nLINKOPTIONS    1
+#define nISLINKREDIRECT 2
+#define nLINKREDIRECT   3
+#define nLINK           4
+
+DataDef HelpData
+" ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ ®B¯Overview®/B¯ ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿"
+" ³ ®B¯Help on Help®/B¯       <Alt H>/<F1>          ®B¯BackTrack®/B¯    <Alt B>/<Alt F1>  ³"
+" ³ ®B¯Table of Contents®/B¯  <Alt C>/<Shift F1>    ®B¯Search Help®/B¯  <Alt S>           ³"
+" ³ ®B¯Index®/B¯              <Alt I>/<Ctrl F1>     ®B¯End Help®/B¯     <Escape>          ³"
+" ³ ®B¯Marking Mode®/B¯       <Alt M>               ®B¯Mark Lines®/B¯   <Alt L>           ³"
+" ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ ®B¯Selecting Links®/B¯ ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´"
+" ³®B¯Next Link®/B¯     <Tab>                ®B¯Next Link/Scroll Down®/B¯    <CursorRight>³"
+" ³®B¯Previous Link®/B¯ <Shift Tab>          ®B¯Previous Link/Scroll Up®/B¯  <CursorLeft> ³"
+" ³®B¯Scroll Up®/B¯     <CursorUp>®B¯*®/B¯ or       ®B¯Next Page®/B¯                <PgDn>       ³"
+" ³              <Ctrl CursorUp>      ®B¯Previous Page®/B¯            <PgUp>       ³"
+" ³®B¯Scroll Down®/B¯   <CursorDown>®B¯*®/B¯ or     ®B¯First Link on Page®/B¯       <Home>       ³"
+" ³              <Ctrl CursorDown>    ®B¯Last Link on Page®/B¯        <End>        ³"
+" ³®B¯Go to Topic®/B¯   <Enter> or Click    ®B¯ Begin File®/B¯               <Ctrl PgUp>  ³"
+" ³              <LeftBtn> on Link    ®B¯End File®/B¯                 <Ctrl PgDn>  ³"
+" ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ ®B¯Miscellaneous®/B¯ ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´"
+" ³®B¯SpeedSearch Links®/B¯                 Typeable Keys (a..z,A..Z,0..9, etc.)   ³"
+" ³®B¯Copy Topic to Clipboard®/B¯           <Grey+> while in View mode             ³"
+" ³®B¯Copy-Append Topic to Clipboard®/B¯    <Ctrl Grey+> while in View mode        ³"
+" ³®B¯Copy block to Clipboard®/B¯           <Grey+> while in Marking mode          ³"
+" ³®B¯Copy-Append block to Clipboard®/B¯    <Ctrl Grey+> while in Marking mode     ³"
+" ÀÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÙ"
+"     ³®B¯*®/B¯In topics which are simply lists of links, such as the Table of ³"
+"     ³ Contents or the Index, <CursorUp> and <CursorDown> select the   ³"
+"     ³ link above or below the current link, respectively.             ³"
+"     ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ"
+end
+
+constant pTOP14                     = 1,
+          TOP14_LEN                 = 14,
+         pBASE_OFFSET               = 15,
+          BASE_OFFSET_LEN           = 4,
+         pNUM_TOPICS                = 19,
+          NUM_TOPICS_LEN            = 2,
+
+         HEADER_SIZE                = 20,
+
+         LONG_STRING                = 255
+constant COPY_TO_CLIPBOARD = 1, COPY_TO_WINDOWS_CLIPBOARD = 2
+
+integer handle, base_offset, err_no
+integer header_loaded, index_loaded
+
+string  header[HEADER_SIZE]
+string  top14[14]
+string  help_topic[TOPIC_SIZE]
+string  help_fn[PATHLEN]
+integer first_pass
+integer index_style, curr_line, index_flags
+
+integer mark_help_id
+integer copy_topic_id
+
+forward proc CopyTopic(integer copy_topic_to_clipboard, integer append)
+forward integer proc lCopyTopic(integer buffer_id, integer copy_topic_to_clipboard, integer append)
+forward proc MarkHelp(integer mark_line)
+integer original_text_attr
+integer original_cursor_attr
+
+integer prev_mark_line
+
+proc MarkHelpPrologue()
+    if Abs(CurrLine() - prev_mark_line) < 1
+        UpdateDisplay()
+    else
+        UpdateDisplay(_WINDOW_REFRESH_)
+    endif
+end
+
+proc MarkHelpStartup()
+    Set(TextAttr, original_text_attr)
+    Set(CursorAttr, original_cursor_attr)
+    UpdateDisplay(_WINDOW_REFRESH_)
+end
+
+CmdMap MarkCmdMap
+    Prologue = MarkHelpPrologue()
+    Startup  = MarkHelpStartup()
+    //Cleanup  = HelpCleanup()
+    KeyDef   = ForcedKeys
+    flags    = EXCLUSIVE
+
+    [RepeatFind]    RepeatSearch()
+
+    [Down]          Down()
+    [Up]            Up()
+
+    [ScrollDown]    ScrollDown()
+    [ScrollUp]      ScrollUp()
+    [RollDown]      RollDown()
+    [RollUp]        RollUp()
+    [WheelDown]     WheelDown()
+    [WheelUp]       WheelUp()
+
+    [PageUp]        PageUp()
+    [PageDown]      PageDown()
+
+    [BegFile]       BegFile()
+    [EndFile]       EndFile()
+
+//  [lLeftBtn]      MouseHelp()
+//  [lRightBtn]     EndProcess()
+
+    [CReturn]       Down()
+    [Escape]        EndProcess(FALSE)
+    [Exit]          EndProcess(FALSE)
+
+    [MarkLine]      MarkLine()
+    [Copy]          Copy()
+    [CopyAppend]    CopyAppend()
+end MarkCmdMap
+
+proc MarkHelp(integer mark_line)
+    integer id, line, row, cursor
+
+    PushBlock()
+    if CreateBuffer("*Mark Help Buffer*", _SYSTEM_, mark_help_id, _EMPTY_BUFFER_|_DONT_GOTO_BUFFER_|_FORCE_NAME_)
+        if lCopyTopic(mark_help_id, FALSE, FALSE)
+            line = CurrLine()
+            row  = CurrRow()
+            id = GotoBufferId(mark_help_id)
+            if id
+                UnMarkBlock()
+                GotoLine(line)
+                ScrollToRow(row)
+                if (mark_line)
+                    MarkLine()
+                endif
+                cursor = Set(Cursor, ON)
+                lProcess(MarkCmdMap, _ENABLE_SEARCH_ | flDISPLAY)
+                Set(Cursor, cursor)
+                GotoBufferId(id)
+                ///??? really just want to set update flags
+                UpdateDisplay(_WINDOW_REFRESH_)
+            endif
+        endif
+    endif
+    PopBlock()
+end
+
+integer proc IsIndex()
+    return (lower(help_topic) == lower(INDEX))
+end
+
+constant ERR_TOPIC_NOT_FOUND =   -1,
+         ERR_CORRUPTED_FILE  =   -2,
+         ERR_FILE_NOT_FOUND  =   -3,
+         ERR_INVALID_FILE    =   -4
+
+integer external_help_found // 0 first time, -1 == not-found, otherwise, found
+
+integer proc ExternalHelp(string options, string topic)
+    integer msglevel, ok = FALSE
+
+    if external_help_found <> -1
+        if external_help_found == 0 and (external_help_found =
+                Length(SearchPath("helphelp.mac", Query(TSEPath), "mac"))) == 0
+            external_help_found = -1
+        else
+            msglevel = Set(MsgLevel, _NONE_)
+            ok = ExecMacro(Format("helphelp"; options; topic)) and
+                    Query(MacroCmdLine) == "true"
+            Set(MsgLevel, msglevel)
+        endif
+    endif
+    return (ok)
+end
+
+integer proc Error(string msg, integer no)
+    err_no = no
+    GotoBufferId(HELP_TOPIC_ID)
+    EmptyBuffer()
+
+    if lower(help_topic) == lower(KEY_ASSIGNMENTS)
+        InsertKeyAssignments()
+    elseif not ExternalHelp("-h", help_topic)   //???XXX need full topic here
+        do 10 times
+            AddLine()
+        enddo
+        AddLine(format('':(Query(WindowCols) - length(msg)) / 2,msg))
+        BegFile()
+    endif
+    return (FALSE)
+end
+
+proc GenerateIndex()
+//    string s[TOPIC_SIZE], ch[1] = ''
+
+    GotoBufferId(HELP_INDEX_ID)
+    index_style = TRUE
+
+    if not index_loaded
+        EmptyBuffer()
+        GotoBufferId(HELP_HEADER_ID)
+        BegFile()
+        GenerateIndex2()
+        GotoBufferId(HELP_INDEX_ID)
+        BegFile()
+        index_loaded = TRUE
+    endif
+end
+
+integer proc PosSubtopic(string full_topic)
+    return (Pos(';',full_topic))
+end
+
+string proc JustSubtopic(string full_topic)
+    integer n
+    if (n = Pos(';',full_topic)) <> 0
+        return (full_topic[n+1:Length(full_topic)])
+    endif
+    return ("")
+end
+
+string proc JustTopic(string full_topic)
+    integer n
+
+    if (n = Pos(';',full_topic)) <> 0
+        return (full_topic[1:n-1])
+    endif
+    return (full_topic)
+end
+
+string proc LoadTopicInfo(var integer off, var integer num_lines, var integer index_flags)
+    // and load structure information
+    off         = PeekLong(CurrLinePtr()) + base_offset
+    num_lines   = PeekWord(AdjPtr(CurrLinePtr(), 4          ))
+    index_flags = PeekByte(AdjPtr(CurrLinePtr(), INDEX_FLAG_COLUMN - 1))
+
+    // return "pretty" name
+    return (GetText(INDEX_TOPIC_COLUMN,TOPIC_SIZE))
+end
+
+integer proc FindTopicInIndex(string full_topic)
+
+    help_topic = full_topic
+
+    GotoBufferId(HELP_HEADER_ID)
+    BegFile()
+
+    loop
+        if lFind(JustTopic(full_topic),'i$')
+            if CurrPos() == INDEX_TOPIC_COLUMN
+                return (TRUE)
+            endif
+            EndLine()
+        else
+            break
+        endif
+    endloop
+    return (FALSE)
+end
+
+string  search_keyword[64], prologue_search[sizeof(search_keyword)]
+integer search_type
+
+integer load_index_if_not_found,
+        pop_up_search_menu,
+        load_previous_topic
+
+forward menu SearchMenu()
+forward integer proc LookupTopic(string new_topic, integer search_dir)
+
+proc GetTopic(var string topic)
+    topic = GetText(6 + 1 + sizeof(search_keyword),CurrLineLen())
+end
+
+integer search_line, view_topics_id, last_pass_invoked_search
+
+string  previous_topic[TOPIC_SIZE]
+string  previous_fn[PATHLEN]
+integer previous_line, previous_row, previous_pos
+
+integer proc SameTopic(string topic)
+    return (topic == format(previous_fn,'|',previous_topic))
+end
+
+proc SaveTopicPosition()
+    string prev_topic[LONG_STRING] = ''
+    string line[2]
+    integer n, id
+
+    if previous_fn == ""
+        return()
+    endif
+
+    if GetBufferId() <> view_topics_id
+        // assume we're in the topic buffer
+        id = GotoBufferId(HELP_CONTROL_ID)
+
+        GetTopic(prev_topic)
+        if not SameTopic(prev_topic)
+            AddLine()
+        endif
+
+        line = '  '
+        PokeWord(AdjPtr(Addr(line),2), previous_line)
+        n = iif(last_pass_invoked_search, Length(search_keyword),0)
+        BegLine()
+        _cmKillToEol()
+        InsertText(format(line, chr(previous_row), chr(previous_pos),chr(index_flags),chr(n),search_keyword:-sizeof(search_keyword),previous_fn,'|',previous_topic), _OVERWRITE_)
+        GotoBufferId(id)
+    endif
+end
+
+integer proc PreviousTopic(integer require_unique_topic)
+    integer help_line, help_row, help_pos, id
+    string prev_topic[LONG_STRING] = ''
+
+    id = GotoBufferId(HELP_CONTROL_ID)
+
+    retry:
+
+    if NumLines()
+        help_line   = PeekWord(CurrLinePtr())
+        help_row    = CurrChar(3)
+        help_pos    = CurrChar(4)
+        index_flags = CurrChar(5)
+        prologue_search = GetText(6 + 1, CurrChar(6))
+        GetTopic(prev_topic)
+        _cmKillLine()   // remove current topic since GotoTopic will add it back
+        Up()
+
+        if require_unique_topic and SameTopic(prev_topic)
+            goto retry
+        endif
+
+        LookupTopic(prev_topic, 0)
+        GotoLine(help_line)
+        GotoPos(help_pos)
+        ScrollToRow(help_row)
+        return (TRUE)
+    else
+        GotoBufferId(id)
+    endif
+    return (FALSE)
+end
+
+integer proc OpenHelpFile(string fn)
+    help_fn = fn
+    handle = fOpen(help_fn, _OPEN_READONLY_ | _OPEN_DENYWRITE_)
+    return (iif(handle > 0, TRUE, Error(format(HELP_FILE,help_fn,NOT_FOUND), ERR_FILE_NOT_FOUND)))
+end
+
+proc CloseHelpFile()
+    if (handle > 0)
+        fClose(handle)  // no error check yet
+        handle = 0
+    endif
+end
+
+integer proc LoadHeader(string passed_fn)
+    integer new_file, num_topics
+    string fn[PATHLEN], search_fn[PATHLEN]
+    fn = passed_fn
+    if fn == ''
+        if not first_pass
+            fn = help_fn
+        endif
+        if Length(fn) == 0
+            if LocalHelp(-1)
+                fn = SplitPath(CurrMacroFileName(),_DRIVE_|_NAME_) + ".hlp"
+                if not FileExists(fn)
+                    fn = SplitPath(CurrMacroFileName(),_NAME_)
+                endif
+            endif
+        endif
+    endif
+    if SplitPath(fn, _NAME_) == ''
+        fn = Query(HelpFile)           //??? need side-effect when changed
+    endif
+    if SplitPath(fn,_EXT_) == ''
+        fn = fn + ".hlp"
+    endif
+    if GetDrivePath(fn) == ''
+        search_fn = SearchPath(fn, Query(TSEPath), "help")
+        if Length(search_fn) <> 0
+            fn = search_fn
+        endif
+    endif
+
+    GotoBufferId(HELP_HEADER_ID)
+
+    new_file = fn <> help_fn
+    if new_file or handle <= 0
+        CloseHelpFile()
+        if not OpenHelpFile(fn)
+            help_fn = ''
+            return (FALSE)
+        endif
+        if new_file or not header_loaded
+            header_loaded = FALSE
+            index_loaded = FALSE
+            if VerifyHelp(handle) == 0 and fRead(handle, header, sizeof(header)) == sizeof(header)
+                help_fn     = fn
+                first_pass  = FALSE
+                top14       = header[1:TOP14_LEN]
+                base_offset = PeekLong(AdjPtr(Addr(header),pBASE_OFFSET + 1))
+                num_topics  = PeekWord(AdjPtr(Addr(header),pNUM_TOPICS  + 1))
+                EmptyBuffer()
+                header_loaded = InsertHelp(handle, top14, num_topics)
+                return (header_loaded)
+            endif
+            CloseHelpFile()
+            help_fn = ''
+            return (Error(format("'",fn,"' ",IS_NOT_A_VALID_HELP_FILE), ERR_INVALID_FILE))
+        endif
+    endif
+    return (TRUE)
+end
+
+proc TopicNotFound(string topic)
+    // Assume we're in HELP_TOPIC_ID
+    EmptyBuffer()
+    Error(format(TOPIC_NOT_FOUND,topic,NOT_FOUND), ERR_TOPIC_NOT_FOUND)
+end
+
+integer new_title, search_from_beginning, current_topic_line
+
+forward proc GotoFirstPage()
+forward proc GotoFirstLinkOnCurrPage()
+
+proc MakeSubstitutions()
+    string sub[TOPIC_SIZE]
+
+    PushBlock()
+    BegFile()
+    while lFind("®R¯{.*}®/R¯","x")
+        MarkFoundText(1)
+        sub = GetMarkedText()
+        MarkFoundText()
+        KillBlock()
+        InsertText(GetGlobalStr(sub),_INSERT_)
+    endwhile
+    PopBlock()
+end
+
+proc StripFilenameAndTopic(var string fn, var string topic)
+    integer n
+    if (n = pos('|',topic)) <> 0
+        fn = topic[1:n-1]
+        topic = topic[n+1:sizeof(topic)]
+    endif
+end
+
+integer proc LookupTopic(string full_passed_topic, integer search_dir)
+    integer width, off, num_lines, n, found
+    string topic[TOPIC_SIZE], fn[PATHLEN], pretty_topic[TOPIC_SIZE]
+
+    topic = full_passed_topic
+    fn = ''
+
+    retry:
+
+    EmptyBuffer(HELP_TOPIC_ID)
+    new_title = TRUE
+    index_style = width = 0
+
+    if not search_dir and GotoBufferId(HELP_TOPIC_ID)
+        if ExternalHelp("-r", topic)
+            return (80)
+        endif
+    endif
+
+    // strip full_passed_topic into parts (fn,topic;subtopic)
+    StripFilenameAndTopic(fn, topic)
+    help_topic = topic
+    index_flags = 0
+
+    if LoadHeader(fn)
+        if search_dir
+            retry_2:
+            search_line = search_line + search_dir
+            found = search_line >= 1 and search_line <= NumLines()
+            GotoLine(search_line)
+            #ifdef FAST_SEARCH
+            if found and not (CurrChar(INDEX_FLAG_COLUMN) & ndxVISIBLE)
+                goto retry_2
+            endif
+            #endif
+            search_line = CurrLine()
+        else
+            found = FindTopicInIndex(help_topic)
+        endif
+
+        current_topic_line = CurrLine()
+        if found
+            pretty_topic = LoadTopicInfo(off, num_lines, index_flags)
+            if PosSubtopic(help_topic)
+                help_topic = pretty_topic + ';' + JustSubtopic(help_topic)
+            else
+                help_topic = pretty_topic
+            endif
+
+            GotoBufferId(HELP_TOPIC_ID)
+
+            if fSeek(handle, off, 0) == off
+                // Insert topic
+                EmptyBuffer()
+
+                AddLine()
+                AddLine()
+                InsertLine()
+
+                width = InsertHelp(handle, top14, num_lines)
+
+                if (index_flags & ndxREDIRECTED)
+                    if (search_dir)
+                        // if searching, skip re-directed topics
+                        // this optimization results in a TREMENDOUS speed increase!!!
+                        index_style = width = 0
+                        EmptyBuffer(HELP_TOPIC_ID)
+                        GotoBufferId(HELP_HEADER_ID)
+                        goto retry_2
+                    endif
+                    topic = GetText(1,sizeof(help_topic))
+                    //??? check for infinite loop (give it a max of 10 times or so)
+                    goto retry
+                endif
+                if (index_flags & ndxCOLUMNAR)
+                    index_style = TRUE
+                endif
+                if (index_flags & ndxREPLACE)
+                    MakeSubstitutions()
+                endif
+            else
+                Error(CORRUPTED_HELP_FILE, ERR_CORRUPTED_FILE)
+            endif
+        elseif lower(help_topic) == lower(HELP_ON_HELP)
+            GotoBufferId(HELP_TOPIC_ID)
+            InsertData(HelpData)
+        elseif lower(help_topic) == lower(KEY_ASSIGNMENTS)
+            GotoBufferId(HELP_TOPIC_ID)
+            InsertKeyAssignments()
+        elseif IsIndex()
+            GenerateIndex()
+        elseif load_index_if_not_found
+            GenerateIndex()
+            findstr = help_topic
+            SpeedSearch(ssNONE)
+            help_topic = INDEX
+        else
+            GotoBufferId(HELP_TOPIC_ID)
+        endif
+//
+        load_index_if_not_found = FALSE
+
+        if NumLines() == 0 and CurrLineLen() == 0
+            TopicNotFound(JustTopic(help_topic))
+        else
+            if PosSubTopic(help_topic)
+                BegFile()
+                if not lFind("®S¯" + JustSubtopic(help_topic) + "®/S¯","ig")
+                    TopicNotFound(JustSubtopic(help_topic))
+                    return (width)
+                endif
+
+                do Query(ScreenRows) times
+                    if not Up() or PosFirstNonWhite() == 0
+                        break
+                    endif
+                enddo
+
+                if (n = Query(ScreenRows) - NumLines() + CurrLine()) > 0
+                    PushPosition()
+                    EndFile()
+                    do n times
+                        AddLine()
+                    enddo
+                    PopPosition()
+                endif
+
+                ScrollToTop()
+                GotoFirstLinkOnCurrPage()
+            elseif not search_active
+                GotoFirstPage()
+            endif
+        endif
+    else
+        GotoBufferId(HELP_TOPIC_ID)
+        if lower(help_topic) == lower(HELP_ON_HELP)
+            width = InsertData(HelpData)
+        endif
+    endif
+    return (width)
+end
+
+integer proc GotoTopic(string topic)
+    SaveTopicPosition()
+    return (LookupTopic(topic, 0))
+end
+
+integer proc isCursorOnLink()
+    return (CurrChar() == chTAG_START and Upcase(CurrChar(CurrPos() + 1)) == chLINK)
+end
+
+integer proc isGotoNewLink()
+    return (not isCursorOnLink() or CurrLine() <> curr_line)
+end
+
+integer proc TopLine()
+    return (CurrLine() - CurrRow() + 1)
+end
+
+integer proc BottomLine()
+    return (CurrLine() - CurrRow() + Query(WindowRows))
+end
+
+integer proc GotoLink(string opt)
+    integer delta = CurrRow() - CurrLine()
+
+    if lFind(LinkSearch,opt + 'x')
+        ScrollToRow(CurrLine() + delta)
+        return (TRUE)
+    endif
+    return (FALSE)
+end
+
+integer proc GotoLinkInAlley(/*integer first, integer last,*/ string opt)
+    integer col, fnd_col
+
+//    if first and last endif // bogus code for unused parms
+
+    col = XlatHelp(CurrPos(), TRUE)
+    PushPosition()
+    while GotoLink(opt)
+        fnd_col = XlatHelp(CurrPos(), TRUE)
+        if (fnd_col > col - 5 and fnd_col < col + 5)
+            KillPosition()
+            return (TRUE)
+        endif
+        if opt == ""
+            Right()
+        endif
+    endwhile
+    PopPosition()
+
+    return (FALSE)
+    /*
+    _cmMarkColumnCoords(first, CurrCol() - 5, last, CurrCol() + 5)
+    return (GotoLink(opt + 'l'))
+    */
+end
+
+integer proc GotoLinkOnCurrPage(string opt)
+    _cmMarkLineCoords(TopLine(), BottomLine())
+    return (GotoLink(opt + 'l'))
+end
+
+proc GotoFirstLinkOnCurrPage()
+    GotoLinkOnCurrPage("g")
+end
+
+proc GotoLastLinkOnCurrPage()
+    GotoLinkOnCurrPage("gb")
+end
+
+proc GotoFirstPage()
+    BegFile()
+    GotoFirstLinkOnCurrPage()
+end
+
+proc GotoLastPage()
+    EndFile()
+    GotoLastLinkOnCurrPage()
+end
+
+proc GotoNextLink()
+    UpdateDisplayFlags(_THIS_CLINE_REFRESH_)
+    if not GotoLink("+")
+        EndFile()
+        GotoLink("gb")
+    endif
+end
+
+proc GotoPrevLink()
+    UpdateDisplayFlags(_THIS_CLINE_REFRESH_)
+    if not GotoLink("b")
+        BegFile()
+        GotoLink("g")
+    endif
+end
+
+proc UpLink()
+    if index_style
+        if not GotoLinkInAlley(/*1, CurrLine(),*/ "b")
+            GotoPrevLink()
+        endif
+    else
+        ScrollUp()
+        if isGotoNewLink()
+            GotoLastLinkOnCurrPage()
+        endif
+    endif
+end
+
+proc DownLink()
+    if index_style
+        if not GotoLinkInAlley(/*CurrLine(), NumLines(),*/ "+")
+            GotoNextLink()
+        endif
+    else
+        ScrollDown()
+        if isGotoNewLink()
+            GotoFirstLinkOnCurrPage()
+        endif
+    endif
+end
+
+proc ScrollUpTopic()
+    ScrollUp()
+    if isGotoNewLink()
+        if index_style
+            if not GotoLinkInAlley(/*1, CurrLine(),*/ "b")
+                GotoPrevLink()
+            endif
+        else
+            GotoLastLinkOnCurrPage()
+        endif
+    endif
+end
+
+proc ScrollDownTopic()
+    ScrollDown()
+    if isGotoNewLink()
+        if index_style
+            if not GotoLinkInAlley(/*CurrLine(), NumLines(),*/ "")
+                GotoNextLink()
+            endif
+        else
+            GotoFirstLinkOnCurrPage()
+        endif
+    endif
+end
+
+proc GotoRightLink()
+    UpdateDisplayFlags(_THIS_CLINE_REFRESH_)
+    if not GotoLinkOnCurrPage("+")
+        ScrollDown()
+        GotoLinkOnCurrPage("+")
+    endif
+end
+
+proc GotoLeftLink()
+    UpdateDisplayFlags(_THIS_CLINE_REFRESH_)
+    if not GotoLinkOnCurrPage("b")
+        ScrollUp()
+        GotoLinkOnCurrPage("b")
+    endif
+end
+
+proc PrevPage()
+    PageUp()
+    GotoFirstLinkOnCurrPage()
+end
+
+proc NextPage()
+    PageDown()
+    if CurrLine() == NumLines()
+        GotoLastLinkOnCurrPage()
+    else
+        GotoFirstLinkOnCurrPage()
+    endif
+end
+
+integer search_msg_window_active
+
+proc UpdateSearchWindow()
+    FullWindow()
+    UpdateDisplay(_WINDOW_REFRESH_)
+    search_msg_window_active = FALSE
+end
+
+string proc CleanedUpTopic(string topic)
+    string s[TOPIC_SIZE]
+    integer m, ch, hide_level
+
+    hide_level = 0
+    s = ''
+    for m = 1 to length(topic)
+        ch = ASC(topic[m])
+        if ch == ASC("®")
+            if hide_level == 0 and ASC(topic[m+1]) == ASC('#')
+                s = s + chr(Val(topic[m+2:32]))
+            endif
+            hide_level = hide_level + 1
+        elseif ch == ASC("¯")
+            hide_level = hide_level - 1
+        else
+            if hide_level == 0
+                s = s + chr(ch)
+            endif
+        endif
+    endfor
+    return (s)
+end
+
+proc HelpPrologue()
+    string  fn[1], title[TOPIC_SIZE]
+
+    // make sure finds never scroll screen since HighLight and UpdateDisplay()
+    // logic can't handle horizontal scrolling
+    GotoXOffset(0)
+
+    if search_msg_window_active
+        UpdateSearchWindow()
+    endif
+
+    if new_title
+        fn = ''
+        title = help_topic
+        StripFilenameAndTopic(fn, title)
+        _cmListHeader(CleanedUpTopic(JustTopic(title)))
+    endif
+
+    curr_line = CurrLine()
+
+    last_pass_invoked_search = FALSE
+
+    if Length(prologue_search)
+        last_pass_invoked_search = TRUE
+        UpdateSearchWindow()
+        if lFind(prologue_search,iif(search_from_beginning, 'ig', 'i'))
+            _cmHiLiteFoundText(0)
+        endif
+    elseif not search_active
+        findstr = ''
+        if index_style
+            BufferVideo()
+            UpdateDisplay(_WINDOW_REFRESH_)
+            UnBufferVideo()
+        else
+            UpdateDisplay(_CLINE_REFRESH_)
+        endif
+    endif
+
+    previous_topic      = help_topic
+    previous_fn         = help_fn
+    previous_line       = CurrLine()
+    previous_row        = CurrRow()
+    previous_pos        = CurrPos()
+
+    prologue_search = ''
+    search_from_beginning = new_title = search_active = FALSE
+
+    if pop_up_search_menu
+        pop_up_search_menu = FALSE
+        SearchMenu()
+        HelpPrologue()
+    endif
+
+end
+
+proc InfoPrologue()
+    UpdateDisplay()
+end
+
+proc InfoStartup()
+    _cmListFooter(PRESS_A_KEY_TO_CONTINUE)
+end
+
+cmdmap InfoCmdMap
+    Startup  = InfoStartup()
+    Prologue = InfoPrologue()
+    Default  = EndProcess(TRUE)
+end InfoCmdMap
+
+string proc FixupRedirectedLink(string link)
+    string redirected_topic[LONG_STRING], full_topic[LONG_STRING]
+    string fn[PATHLEN], topic[TOPIC_SIZE], subtopic[TOPIC_SIZE]
+    integer p_subtopic
+
+    fn = ''
+    MarkFoundText(nLINKREDIRECT)
+    redirected_topic = _cmGetMarkedText()
+
+    StripFilenameAndTopic(fn, redirected_topic)
+
+    p_subtopic  = PosSubtopic(redirected_topic)
+    topic       = JustTopic(redirected_topic)
+    subtopic    = JustSubtopic(redirected_topic)
+
+    if p_subtopic
+        if p_subtopic == 1
+            topic = JustTopic(help_topic)
+        endif
+        if p_subtopic == Length(redirected_topic)
+            subtopic = link
+        endif
+    endif
+
+    full_topic = iif(Length(fn), fn + "|","") + topic + iif(Length(subtopic), ';' + subtopic, "")
+
+    return (full_topic)
+end
+
+proc GotoTopicAtCursor()
+    string topic[TOPIC_SIZE]
+    integer maxlen, infobox
+
+    if isCursorOnLink() and lFind(LinkSearch,"xc")       //???XXX need Find("s", "CurrPos Only")
+        infobox = Upcase(CurrChar(CurrPos() + 2)) == chINFOLINK
+        prologue_search = ''
+        if GetBufferId() == view_topics_id
+            prologue_search = search_keyword
+            search_from_beginning = TRUE
+        endif
+        MarkFoundText(nLINK)
+        topic = _cmGetMarkedText()
+        MarkFoundText(nISLINKREDIRECT)
+        if isBlockMarked()
+            topic = FixupRedirectedLink(topic)
+        elseif infobox
+            topic = "Info->"+topic
+        endif
+        maxlen = GotoTopic(topic)
+        if maxlen and infobox
+            // InfoBox
+            if NumLines() < Query(ScreenRows) - 2
+                if EditPopWin("",WhereX() + Query(PopWinX1),WhereY() + Query(PopWinY1),maxlen + 2,NumLines(), 1 /* Query(CurrWinBorderType)*/, 0)
+                    ProcessInWindow(InfoCmdMap, 0)
+                    PopWinClose()
+                endif
+                PreviousTopic(FALSE)
+            endif
+        endif
+    endif
+end
+
+// does NOT handle a horizontally scrolled window
+
+integer proc GotoTopicAt(integer col)
+    integer p_topic = 0
+
+    XlatHelp(col, FALSE, p_topic)
+    if (p_topic)
+        GotoPos(p_topic)
+        return (TRUE)
+    endif
+//    return (isCursorOnLink())
+    return (FALSE)
+end
+
+proc GotoTopicAtMouseCursor()
+    PushPosition()
+    if GotoMouseCursor() and GotoTopicAt(CurrPos())
+        KillPosition()
+        GotoTopicAtCursor()
+    else
+        PopPosition()
+    endif
+end
+
+proc CleanUpTopic()
+    integer ch
+
+    lReplace("®[~#].*¯","","xgn")
+    if lFind("®#","g")
+        PushPosition()
+        PushBlock()
+        BegFile()
+        if lFind("®\#.*¯","x")
+            repeat
+                MarkFoundText()
+                ch = Val(GetText(CurrPos()+2,CurrLineLen()))
+                KillBlock()
+                InsertText(chr(ch),_INSERT_)
+            until not lRepeatFind(_SEARCH_INCLUSIVE_)
+        endif
+        PopBlock()
+        PopPosition()
+    endif
+end
+
+integer proc lCopyTopic(integer buffer_id, integer copy_topic_to_clipboard, integer append)
+    integer clipboard_id, id, copied
+
+    _cmMarkLineCoords(1,NumLines())
+    clipboard_id = Set(ClipBoardId, buffer_id)
+    copied = Copy()
+    Set(ClipBoardId, clipboard_id)
+
+    if copied
+        id = GotoBufferId(buffer_id)
+        if id
+
+            BegFile()
+            if copy_topic_to_clipboard
+                InsertLine(JustTopic(help_topic))
+            endif
+
+            CleanUpTopic()
+
+            if copy_topic_to_clipboard
+                _cmMarkLineCoords(1,NumLines())
+                if copy_topic_to_clipboard == COPY_TO_WINDOWS_CLIPBOARD
+                    copied = CopyToWinClip()
+                else
+                    copied = iif(append, CopyAppend(), Copy())
+                endif
+            endif
+            GotoBufferId(id)
+            return (copied)
+        endif
+    endif
+    return (FALSE)
+end
+
+proc CopyTopic(integer copy_topic_to_clipboard, integer append)
+    if CreateBuffer("*CopyTopic Buffer*", _SYSTEM_, copy_topic_id, _DONT_GOTO_BUFFER_|_FORCE_NAME_)
+        lCopyTopic(copy_topic_id, copy_topic_to_clipboard, append)
+        EmptyBuffer(copy_topic_id)
+    endif
+end
+
+proc HelpOnHelp()
+    GotoTopic(HELP_ON_HELP)
+end
+
+proc TableOfContents()
+    GotoTopic(TABLE_OF_CONTENTS)
+end
+
+proc MainIndex()
+    GotoTopic(INDEX)
+end
+
+proc MouseHelpLine()
+    integer n
+    string ch[1]
+
+    n = Query(MouseX) - ((Query(ScreenCols) - Length(HELP_FLAG)) / 2) + 1
+    if n > 0
+        ch = HELP_FLAG[n]
+        if ch <> ' '
+            PushKey(KeyCode("Alt "+ch))
+        endif
+    endif
+end
+
+proc MouseHelp()
+
+    case MouseHotSpot()
+        when _MOUSE_CLOSE_
+            EndProcess()
+        when _MOUSE_UP_, _MOUSE_DOWN_, _MOUSE_PAGEUP_, _MOUSE_PAGEDOWN_,
+             _MOUSE_V_ELEVATOR_
+             ProcessHotSpot()
+        when _MOUSE_MARKING_
+            GotoTopicAtMouseCursor()
+        when _NONE_
+            if Query(MouseY) == Query(WindowRows) + 1
+                MouseHelpLine()
+            endif
+    endcase
+end
+
+// ENGLISH
+    constant tyNONE                 = 0x00,
+             tySEARCH_CURRENT_TOPIC = 0x01,
+             tySEARCH_ALL_TOPICS    = 0x02,
+             tyVIEW_TOPICS          = 0x04,
+             SEARCH_TYPE_MASK       = 0x07,
+             flMAKE_NEW_TYPE        = 0x08,
+
+             flFORCE_PROMPT         = 0x10,
+             flFORCE_NEXT_TOPIC     = 0x20,
+             flREPEAT_SEARCH        = 0x40,
+             flFORWARD              = 0x80,
+             flUSE_TOPIC_LIST       = 0x100,
+             flMSG_IF_NOT_FOUND     = 0x200
+
+forward keydef HelpKeys
+
+integer prev_help_exists
+
+proc HelpStartup()
+    speedsearch_help = TRUE
+
+    _cmListFooter(HELP_LINE_STR)
+
+    Set(TextAttr, Query(HelpTextAttr))
+
+    Enable(HelpKeys)
+
+    ExecHook(_HELP_STARTUP_)
+
+    SetCursorOff()
+
+    if not (load_previous_topic and prev_help_exists and PreviousTopic(FALSE))
+        GotoTopic(help_topic)
+    endif
+
+    load_previous_topic = FALSE
+    prev_help_exists = TRUE
+end
+
+proc HelpCleanup()
+    SaveTopicPosition()
+    ExecHook(_HELP_CLEANUP_)
+end
+
+CmdMap HelpCmdMap
+    Prologue = HelpPrologue()
+    Startup  = HelpStartup()
+    Cleanup  = HelpCleanup()
+    KeyDef   = ForcedKeys
+    flags    = EXCLUSIVE
+
+    [SelfInsert]    /* search_type = tyNONE*/    SearchFwd(0)
+    [BackSpace]     /* search_type = tyNONE*/    if findstr == "" PreviousTopic(TRUE) else SearchBack() endif
+    [RepeatFind]    RepeatSearch()
+
+    [TabRight]      GotoNextLink()
+    [TabLeft]       GotoPrevLink()
+
+    [Down]          DownLink()
+    [Up]            UpLink()
+
+    [Right]         GotoRightLink()
+    [Left]          GotoLeftLink()
+
+    [ScrollDown]    ScrollDownTopic()
+    [ScrollUp]      ScrollUpTopic()
+    [RollDown]      ScrollDownTopic()
+    [RollUp]        ScrollUpTopic()
+    [WheelDown]     WheelDown()
+    [WheelUp]       WheelUp()
+
+    [PageUp]        PrevPage()
+    [PageDown]      NextPage()
+
+    [BegLine]       GotoFirstLinkOnCurrPage()
+    [EndLine]       GotoLastLinkOnCurrPage()
+    [BegLineTog]    GotoFirstLinkOnCurrPage()
+    [EndLineTog]    GotoLastLinkOnCurrPage()
+
+    [BegFile]       GotoFirstPage()
+    [EndFile]       GotoLastPage()
+
+    [lLeftBtn]      MouseHelp()
+    [lRightBtn]     EndProcess()
+
+    [CReturn]       GotoTopicAtCursor()
+    [Escape]        EndProcess()
+    [Exit]          EndProcess()
+
+    [MarkLine]      MarkHelp(TRUE)
+    [Copy]          CopyTopic(COPY_TO_CLIPBOARD, FALSE)
+    [CopyToWinClip] CopyTopic(COPY_TO_WINDOWS_CLIPBOARD, FALSE)
+    [CopyAppend]    CopyTopic(COPY_TO_CLIPBOARD, TRUE)
+
+end HelpCmdMap
+
+public integer proc _cmlHelp(string topic, integer flag)
+    integer id, level, save_speedsearch_help
+
+    err_no = 0
+    first_pass = TRUE       //???XXX don't clear help_fn since we optimize lookup ???
+    level = Set(HelpLevel, Query(HelpLevel) + 1)
+
+    if EditPopWin(HELP_TITLE,1,1,Query(ScreenCols) - 2,Query(ScreenRows) - 2, Query(CurrWinBorderType), (flCLOSE | flVSCROLL) shl 8)
+        load_index_if_not_found = flag & _LOAD_INDEX_
+        pop_up_search_menu      = flag & _SEARCH_HELP_
+        load_previous_topic     = flag & _PREV_TOPIC_
+
+        if not load_previous_topic
+            EmptyBuffer(HELP_CONTROL_ID)
+        endif
+
+        help_topic = topic
+
+        id = GetBufferId()
+        PushBlock()
+        search_from_beginning = new_title = TRUE
+
+        original_text_attr = Query(TextAttr)
+        original_cursor_attr = Query(CursorAttr)
+
+        save_speedsearch_help = speedsearch_help
+        err_no = LoListInWindow(HelpCmdMap,_ENABLE_SEARCH_)
+        speedsearch_help = save_speedsearch_help
+
+        PopBlock()
+        GotoBufferId(id)
+
+        PopWinClose()
+    endif
+    CloseHelpFile()
+    Set(HelpLevel, level)
+    return (err_no)
+end _cmlHelp
+
+public proc _cmHelpDispatch(integer flags)
+    _cmlHelp(TABLE_OF_CONTENTS, flags)
+end
+
+integer search_matches
+
+proc ActivateSearchWindow()
+    if not search_msg_window_active
+        Window(10 - 1, 8 - 1, 70 + 1, 14 + 1)
+        DrawBox(1|DRAW_SHADOW, Query(MenuBorderAttr))
+        Window(10, 8, 70, 14)
+
+        Set(Attr, Query(MenuTextAttr))
+        ClrScr()
+        PutStrXY(1, 2, format(SEARCH_FOR_MSG,search_keyword))
+        PutStrXY(1, 4, TOPIC)
+        PutStrXY(15, 8, PRESS_ESC_TO_STOP_SEARCH)
+        search_msg_window_active = TRUE
+    endif
+end
+
+integer video_buffered
+
+proc UnBufferVideoIfBuffered()
+    if (video_buffered)
+        video_buffered = FALSE
+        UnBufferVideo()
+    endif
+end
+
+proc SearchMsg(string msg)
+    BufferVideo()
+    ActivateSearchWindow()
+    VGotoXY(1, 6)
+    ClrEol()
+    Write(msg; PRESS_A_KEY_TO_CONTINUE)
+    UnBufferVideo()
+    UnBufferVideoIfBuffered()
+    GetKey()
+end
+
+proc ViewTopics()
+    SaveTopicPosition()
+    SetCursorOff()
+    if (search_type == tyVIEW_TOPICS) and GotoBufferId(view_topics_id)
+        _cmListHeader(SEARCH_AND_VIEW_TOPICS)
+        /* find_keyword = */ new_title = FALSE
+        prologue_search = ''
+        index_style = TRUE
+    endif
+end
+
+integer proc SearchPrompt(integer force_prompt)
+    if search_keyword == '' or force_prompt
+        return (_cmAsk(format(SEARCH_FOR_MSG,iif(search_type == tySEARCH_CURRENT_TOPIC,CURRENT_TOPIC,ALL_TOPICS)),search_keyword, _HELP_SEARCH_HISTORY_))
+    endif
+    return (TRUE)
+end
+
+integer proc SearchTopic(integer flag)
+    integer restore_original_topic, attr, found, terminated, save_video_buffered
+
+    save_video_buffered = video_buffered
+    video_buffered = FALSE
+
+    SetCursorOff()
+
+    attr = Query(Attr)
+    terminated = found = restore_original_topic = FALSE
+
+    if flag & flMAKE_NEW_TYPE
+        search_type = flag & SEARCH_TYPE_MASK
+    endif
+
+    if SearchPrompt(flag & flFORCE_PROMPT)
+        SaveTopicPosition()
+
+        if (flag & tyVIEW_TOPICS)
+            _cmListHeader(SEARCHING_ALL_TOPICS)
+        endif
+
+        if (flag & flFORCE_NEXT_TOPIC)
+            goto next_topic
+        endif
+
+        loop
+            if lFind(search_keyword,iif(flag & flREPEAT_SEARCH, iif(flag & flFORWARD,"i+","ib"), "i"))
+
+                found = TRUE
+                prologue_search = search_keyword
+                search_matches = search_matches + 1
+
+                if flag & tyVIEW_TOPICS
+                    EndFile()
+                    if GotoBufferId(view_topics_id)
+                        EndFile()
+                        BegLine()
+                        AddLine("®L¯" + help_topic + "®/L¯")
+                        BufferVideo()
+                        video_buffered = TRUE
+                        UpdateSearchWindow()
+                        GotoBufferId(HELP_TOPIC_ID)
+                    endif
+                else
+                    break
+                endif
+            elseif flag & tySEARCH_CURRENT_TOPIC
+                break
+            endif
+
+            if KeyPressed() and (GetKey() in <Escape>,<RightBtn>)
+                SearchMsg(SEARCH_TERMINATED)
+                restore_original_topic = terminated = TRUE
+                break
+            endif
+
+            next_topic:
+
+            if (flag & flUSE_TOPIC_LIST)
+                help_topic = ''
+                PushPosition()
+                if GotoBufferId(view_topics_id)
+                    if iif(flag & flFORWARD, Down(), Up())
+                        help_topic = GetText(4,CurrLineLen() - 7)
+                    else
+                        SearchMsg(NO_MORE_OCCURRENCES)
+                        PopPosition()
+                        break
+                    endif
+                endif
+                PopPosition()
+                if help_topic <> ''
+                    GotoBufferId(HELP_TOPIC_ID)
+                    GotoTopic(help_topic)
+                    search_from_beginning = new_title = TRUE
+                endif
+            else
+                ActivateSearchWindow()
+                UnBufferVideoIfBuffered()
+                if (found = LookupTopic('', iif(not (flag & flFORWARD), -1, 1))) == 0
+                    break
+                endif
+            endif
+
+            if (flag & flFORWARD)
+                BegFile()
+            else
+                EndFile()
+            endif
+
+            BufferVideo()
+            ActivateSearchWindow()
+            VGotoXY(10, 4)
+            ClrEol()
+            Write(CleanedUpTopic(help_topic))
+            UnBufferVideo()
+            UnBufferVideoIfBuffered()
+        endloop
+
+        if flag & tyVIEW_TOPICS
+            GotoBufferId(view_topics_id)
+            restore_original_topic = NumLines() == 0
+            if not terminated
+                BegFile()
+            endif
+        endif
+
+        if not terminated and not found and (flag & flMSG_IF_NOT_FOUND)
+            if search_matches == 0
+                restore_original_topic = TRUE
+                SearchMsg(NO_MATCHES_FOUND)
+            elseif not (flag & tyVIEW_TOPICS)
+                restore_original_topic = TRUE
+                SearchMsg(NO_MORE_OCCURRENCES)
+            endif
+        endif
+
+        if restore_original_topic
+            GotoBufferId(HELP_TOPIC_ID)
+            PreviousTopic(FALSE)
+        endif
+    endif
+
+    Set(Attr, attr)
+
+    UnBufferVideoIfBuffered()
+    video_buffered = save_video_buffered
+    return (found)
+end
+
+proc SearchCurrentTopic()
+    search_line = current_topic_line
+    SearchTopic(tySEARCH_CURRENT_TOPIC | flMAKE_NEW_TYPE | flFORCE_PROMPT | flMSG_IF_NOT_FOUND | flFORWARD)
+end
+
+proc SearchAllTopics()
+    search_line = 0
+    SearchTopic(tySEARCH_ALL_TOPICS | flMAKE_NEW_TYPE | flFORCE_PROMPT | flFORCE_NEXT_TOPIC | flMSG_IF_NOT_FOUND | flFORWARD)
+end
+
+proc SearchNextPrevTopic(integer forward_flag)
+    search_line = current_topic_line
+    case search_type
+        when tySEARCH_ALL_TOPICS, tySEARCH_CURRENT_TOPIC
+            GotoBufferId(HELP_TOPIC_ID)
+            SearchTopic(tySEARCH_ALL_TOPICS | flFORCE_NEXT_TOPIC | flMSG_IF_NOT_FOUND | flREPEAT_SEARCH | forward_flag)
+        when tyVIEW_TOPICS
+            // Only using flREPEAT_SEARCH here to get the 'b' option in the find if going backwards
+            SearchTopic(tySEARCH_ALL_TOPICS | flFORCE_NEXT_TOPIC | flUSE_TOPIC_LIST | flREPEAT_SEARCH | forward_flag)
+        otherwise
+            SearchAllTopics()
+    endcase
+end
+
+proc SearchNextTopic()
+    SearchNextPrevTopic(flFORWARD)
+end
+
+proc SearchPrevTopic()
+    SearchNextPrevTopic(0)
+end
+
+proc SearchAndViewTopics()
+    if view_topics_id == 0
+        PushPosition()
+        if (view_topics_id = CreateTempBuffer()) <> 0
+            DisplayMode(_DISPLAY_HELP_)
+        endif
+        PopPosition()
+    endif
+    if view_topics_id
+        EmptyBuffer(view_topics_id)
+        search_line = 0
+        SearchTopic(tyVIEW_TOPICS | flMAKE_NEW_TYPE | flFORCE_PROMPT | flFORCE_NEXT_TOPIC | flMSG_IF_NOT_FOUND | flFORWARD)
+        if GetBufferId() == view_topics_id
+            ViewTopics()
+        endif
+    endif
+end
+
+proc RepeatSearchTopics(integer forward_flag)
+    case search_type
+        when tyNONE
+            RepeatSearch()
+        when tyVIEW_TOPICS
+            if GetBufferId() == view_topics_id or not SearchTopic(tySEARCH_CURRENT_TOPIC | flREPEAT_SEARCH | forward_flag)
+                SearchNextPrevTopic(forward_flag)
+            endif
+        otherwise
+            SearchTopic(search_type | flMSG_IF_NOT_FOUND | flREPEAT_SEARCH | forward_flag)
+    endcase
+end
+
+KeyDef HelpKeys
+    <f1>        HelpOnHelp()
+    <Alt H>     HelpOnHelp()
+    <Shift F1>  TableOfContents()
+    <Alt C>     TableOfContents()
+    <Ctrl F1>   MainIndex()
+    <Alt I>     MainIndex()
+    <Alt F1>    PreviousTopic(TRUE)
+    <Alt B>     PreviousTopic(TRUE)
+//        <BackSpace> PreviousTopic(TRUE)   ??? can't do this - messes up speed searching
+    <Ctrl A>    SearchAllTopics()
+    <Ctrl N>    SearchNextTopic()
+    <Ctrl P>    SearchPrevTopic()
+    <Ctrl F>    SearchCurrentTopic()
+    <Ctrl L>    RepeatSearchTopics(flFORWARD)
+    <Ctrl B>    RepeatSearchTopics(0)
+    <Ctrl V>    SearchAndViewTopics()
+    <Ctrl T>    ViewTopics()
+    <Alt S>     SearchMenu()
+    <Alt M>     MarkHelp(FALSE)
+    <Alt L>     MarkLine()
+    <Alt K>     MarkColumn()
+end
+
+menu SearchMenu()
+    title = "Search Menu"
+    KeyDef = HelpKeys
+
+    "&Current Topic"         , SearchCurrentTopic()             , CloseBefore
+    "Repeat &Forward"        , RepeatSearchTopics(flFORWARD)    , CloseBefore
+    "Repeat &Backward"       , RepeatSearchTopics(0)            , CloseBefore
+    ""                       ,                                  , Divide
+    "&All Topics"            , SearchAllTopics()                , CloseBefore
+    "&Next Topic"            , SearchNextTopic()                , CloseBefore
+    "&Previous Topic"        , SearchPrevTopic()                , CloseBefore
+    ""                       ,                                  , Divide
+    "Search && &View Topics" , SearchAndViewTopics()            , CloseBefore
+    "Previous &Topic List"   , ViewTopics()                     , CloseBefore
+end
+
+#define INSERT_CODES        0x0001
+#define RETURN_ERROR_CODE   0x8000
+
+public integer proc _cmInsertTopic(string topic, integer flags)
+    integer id, msg_level
+
+    first_pass = TRUE
+    err_no = 0
+
+    msg_level = Set(MsgLevel, _NONE_)
+
+    id = GetBufferId()
+    PushBlock()
+    LookupTopic(topic,0)
+    PopBlock()
+    GotoBufferId(id)
+
+    if err_no == 0
+        GotoBufferId(HELP_TOPIC_ID)
+        if CmpiStr(topic,"Index") == 0 and index_loaded
+            PushBlock()
+            GotoBufferId(HELP_INDEX_ID)
+            MarkLine(1,NumLines())
+            GotoBufferId(HELP_TOPIC_ID)
+            EmptyBuffer()
+            CopyBlock()
+            PopBlock()
+        endif
+        BegFile()
+        InsertLine("®T¯" + help_topic + "®/T¯")
+        AddLine()
+        if (not (flags & INSERT_CODES))
+            CleanUpTopic()
+        endif
+        _cmMarkLineCoords(1,NumLines())
+        GotoBufferId(id)
+        CopyBlock()
+    endif
+
+    Set(MsgLevel,msg_level)
+
+    if (flags & RETURN_ERROR_CODE)
+        return (err_no)
+    endif
+    return (err_no == 0)
+end

@@ -1,0 +1,243 @@
+/*************************************************************************
+                            NOTICE NOTICE NOTICE
+
+    When calling a "bind.s" public procedure from "bind.s" make sure
+    to call the procedure with the _underscore_ before the name.
+
+*************************************************************************/
+
+#include "../common.h"
+#include "bindmsg.si"
+#include "version.h"
+
+integer shutting_down       // so we don't recursively enter shutdown processing
+
+integer proc Odd(integer x)
+    return (x & 1)
+end
+
+string proc GetNameExt(string fn)
+    return (SplitPath(fn, _NAME_|_EXT_))
+end
+
+string proc GetDrivePath(string fn)
+    return (SplitPath(fn, _DRIVE_|_PATH_))
+end
+
+integer proc SlashPos(string st)
+    integer p
+
+    p = Pos('\', st)
+    if p == 0
+        p = Pos('/', st)
+    endif
+    return (p)
+end
+
+DataDef SignonScreen
+#ifdef GUI
+ #ifdef BETA
+    chr(21) + chr(08) + "The SemWare Editor Professional " + "4.48"                                  //  1   1
+ #else
+    chr(21) + chr(08) + "The SemWare Editor Professional " + "4.48"                                  //  1   1
+ #endif
+#else
+ #ifdef BETA
+    chr(16) + chr(08) + "The SemWare Editor Professional (Console) " + "4.48"                        //  1   1
+ #else
+    chr(16) + chr(08) + "The SemWare Editor Professional (Console) " + "4.48"                        //  1   1
+ #endif
+#endif
+    Chr(8)  + Chr(09) + "Copyright 1991-2022 SemWare Corp.  All rights reserved worldwide."     //  2   2
+#ifdef BETA
+    chr(9)   + chr(10) + ""                                                                              //  5   5
+    Chr(26)  + Chr(11) + "This is the " + "2022 Oct 17" + " version."                                       //  5
+    chr(7)   + chr(12) + ""//This is a BETA version.  Please report problems to:"
+#ifdef LINUX
+    chr(7)   + chr(13) + ""//"(private) beta.test@semware.com (list) tse-linux@googlegroups.com"
+#else
+    chr(7)   + chr(13) + ""//"(private) beta.test@semware.com (list) tsepro-beta@googlegroups.com"
+#endif
+#else
+    Chr(26) + Chr(11) + "This is the " + "2022 Oct 17" + " version."                                       //  5
+    chr(34) + chr(12) + "www.semware.com"              //  4   4
+    chr(9)  + chr(13) + ""                                                                              //  5   5
+#endif
+end
+
+integer about_buf
+string c_startup_dir[] = "Startup dir: "
+string c_ui[] = "ui: "
+string memory_used[] = "Memory Used:"
+constant WRAP_CHAR = 13
+
+proc build_about_buf()
+    integer n, i, save_date_format = Set(DateFormat, 11)
+    string work[80]
+
+    if about_buf == 0
+        PushPosition()
+        about_buf = CreateTempBuffer()
+        PopPosition()
+
+        n = SetupCompressedRead(SignOnScreen)
+
+        for i = 1 to n
+            ReadCompressedLine()    // reads into workline
+            #ifdef BETA
+            if (i in 1..7)
+            #else
+            if (i in 1..5)
+            #endif
+                if i == 6
+                    AddLine("", about_buf)
+                endif
+                work = WorkLine()
+                AddLine(Format(' ':ASC(work[1]) - 8, work[3:80]), about_buf)
+            endif
+        endfor
+        AddLine("", about_buf)
+        AddLine(c_startup_dir + SqueezePath(Query(StartupPath), _USE_HOME_PATH_), about_buf)
+        AddLine("Loaded from: " + SqueezePath(Query(PathToExe), _USE_HOME_PATH_), about_buf)
+        AddLine(c_ui + SqueezePath(Query(UIFilename), _USE_HOME_PATH_), about_buf)
+        AddLine(Format("Started at: ", GetDateStr(), " ", GetTimeStr()), about_buf)
+        AddLine("Started From CMD Prompt: " + Str(StartedFromDosPrompt()), about_buf)
+        AddLine(memory_used, about_buf)
+    endif
+    Set(DateFormat, save_date_format)
+end
+
+public proc _cmAbout()
+    integer memkb = MemUsedK()
+    integer memmb = memkb / 1024, remmb = memkb mod 1024
+    integer memgb = memkb / (1024*1024), remgb = memkb mod (1024*1024)
+    string mem[32]
+
+    if memgb > 0
+        mem = format(memgb, ".", remgb, " gb")
+    elseif memmb
+        mem = format(memmb, ".", remmb, " mb")
+    else
+        mem = format(memkb, " kb")
+    endif
+
+    PushLocation()
+    GotoBufferId(about_buf)
+    if lFind(c_ui + "\c", "^gx")
+        InsertText(SqueezePath(Query(UIFilename), _USE_HOME_PATH_), _OVERWRITE_)
+        KillToEOL()
+    endif
+    if lFind(memory_used + "\c", "^gx")
+        Right()
+        InsertText(mem, _OVERWRITE_)
+        KillToEOL()
+    endif
+    PopLocation()
+    MsgBoxBuff("", _OK_ | 0x08, about_buf)
+end
+
+public proc _cmSignOn()
+    integer attr, x1, y1, y, width, height, orig_id
+
+    orig_id = GotoBufferId(about_buf)
+    attr = Set(Attr, Query(TextAttr))
+    BufferVideo()
+
+    width = LongestLineInBuffer() + 2
+    height = NumLines() - 2
+
+    // (cols / 2) - (w / 2) + (even(w) or Odd(cols))
+    x1 = (Query(ScreenCols) / 2) - ((width + 2) / 2) + (Odd(width) == FALSE or Odd(Query(ScreenCols)))
+    y1 = 7
+    if height > 8
+        y1 = 3
+    endif
+
+    Window(x1, y1, x1 + width, y1 + height)
+    ClrScr()
+    DrawBox(1, Query(TextAttr))
+
+    BegFile()
+    for y = 1 to NumLines() - 3
+        PutStrXY(2, y + 1, GetText(1, CurrLineLen()))
+        Down()
+    endfor
+
+    FullWindow()
+    UnBufferVideo()
+    Set(Attr, attr)
+    GotoBufferId(orig_id)
+end
+
+public integer proc _cmlVersion()
+    string work[80]
+
+    SetupCompressedRead(SignOnScreen)
+    ReadCompressedLine()
+    work = WorkLine()
+    MsgBox("", Format(work[3:sizeof(work)]))
+
+    if EquiStr(LoadDir(), GetDrivePath(LoadDir(1)))
+        MsgBox("", LoadDir(1))
+    else
+        MsgBox("", Format(LoadDir(1); LoadDir()))
+    endif
+    return (Version())
+end
+
+// returns last word of first line in signon, hopefully: v4.40
+public string proc _cmVersionStr()
+    string s[80]
+
+    SetupCompressedRead(SignOnScreen)
+    ReadCompressedLine()
+    s = WorkLine()
+    return (GetToken(s, ' ', NumTokens(s, ' ')))
+end
+
+#include "bindcmds.si"
+#include "bindprt.si"
+#include "bindlist.si"
+#include "bindhelp.si"
+#include "bindline.si"
+#include "bindcmd2.si"
+
+proc OnExitCalled()
+//    Unhook(OnExitCalled)  07/09/98 SEM I don't think this is needed???
+    if Query(SaveState)
+        ExecMacro("state -s")
+    endif
+end
+
+public proc _cmEditorShutDown(integer id, integer helper_function)
+    if shutting_down
+        return ()
+    endif
+    shutting_down = shutting_down + 1
+
+    Interp(id, HelperFunctionOffset(helper_function))   // Call users whenpurged
+    ExecHook(_ON_ABANDON_EDITOR_)
+    if Query(PersistentHistory)
+        _cmSaveHistory("")
+    endif
+    if Query(RestoreDirOnExit)
+        SetCurrDriveDir(Query(StartupPath))
+    endif
+    shutting_down = shutting_down - 1
+end
+
+string help_license[] = " ~ h ~ l ~ a ~ "
+
+public integer proc _cmEditorStartup(integer id, integer helper_function)
+    Hook(_ON_CONTROL_BREAK_, OnControlBreak)
+    Hook(_ON_EXIT_CALLED_, OnExitCalled)
+    GetWindowHandleHack()
+
+    SetGlobalStr(help_license, "License Agreement")
+
+    build_about_buf()
+    // Call users Whenloaded: should handle: VideoMode, SignOn, StartupMacros, cmdline
+    Interp(id, HelperFunctionOffset(helper_function))   // Call users whenloaded
+    return (TRUE)
+end
+

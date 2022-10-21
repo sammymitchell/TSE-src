@@ -1,0 +1,709 @@
+integer proc mFilenamesEqual(string fn1, string fn2)
+    #ifdef LINUX
+    return (fn1 == fn2)
+    #else
+    return (EquiStr(fn1, fn2))
+    #endif
+end
+
+integer proc use_windows_dialogs()
+    return (Query(UseCommonDialogs) and WhichOS() <> _LINUX_)
+end
+
+/**************************************************************************
+  03/29/2001 SEM
+        if fn == CurrFilename and appropriate flags set, flag current file
+        as unchanged.
+ **************************************************************************/
+public integer proc _cmlSaveAs(string fn, integer flags)
+    integer attr
+
+    if (attr = FileExists(fn)) == 0
+        flags = flags & ~(_APPEND_|_OVERWRITE_)
+    else                                // the file exists
+        if attr & _READONLY_
+            return (iif(flags & _DONT_PROMPT_, FALSE, Warn(FILE_IS_READONLY, fn)))
+        endif
+        if not (flags & (_APPEND_|_OVERWRITE_))
+            if flags & _DONT_PROMPT_
+                return (FALSE)
+            endif
+//            case _cmOverLayAppendFileMenu() //0=esc,1=app,2=ovrw
+            case _cmMsgBoxEx("Save As", "File " + fn + " already exists", "[&Append];[&Overwrite];[&Cancel]")
+                when 0      return (FALSE)
+                when 1      flags = flags | _APPEND_
+                when 2      flags = flags | _OVERWRITE_
+            endcase
+        endif
+    endif
+    if not WriteFile(fn, INVALID_HANDLE, flags)
+        return (FALSE)
+    endif
+    if mFilenamesEqual(ExpandPath(fn), CurrFilename()) and (flags & (_APPEND_|_USE_BLOCK_)) == 0
+        FileChanged(FALSE)
+    endif
+    return (TRUE)
+end
+
+integer proc CommonSaveAs(integer use_block)
+    string fn[PATHLEN]
+
+    if use_windows_dialogs()
+        fn = GetFilename(iif(use_block, "Save Block As", ""), _WRITE_ACCESS_|_OVERWRITE_)   // saveas
+        return (iif(fn == "", FALSE, _cmlSaveAs(fn, iif(use_block, _USE_BLOCK_, 0))))
+    endif
+
+    fn = ''
+    while _cmAskFilename(iif(use_block, SAVE_BLOCK_TO_MSG, SAVE_AS_MSG), fn, _WRITE_ACCESS_, _EDIT_HISTORY_)
+        if _cmlSaveAs(fn, iif(use_block, _USE_BLOCK_, 0))
+            return (TRUE)
+        endif
+    endwhile
+    return (FALSE)
+end
+
+public integer proc _cmlSaveBlock(string fn, integer flags)
+    return (_cmlSaveAs(fn, flags | _USE_BLOCK_))
+end
+
+public integer proc _cmSaveAs()
+    return (CommonSaveAs(0))
+end
+
+public integer proc _cmSaveBlock()
+    return (CommonSaveAs(isBlockInCurrFile() <> 0))
+end
+
+/*****************************************************************************
+  Change the current file's name:
+
+  Ignore names of "".
+
+  Accept bogus names, however.
+ *****************************************************************************/
+public integer proc _cmChangeCurrFilename2(string s, integer flags)
+    string path[PATHLEN], save_path[PATHLEN]
+    integer ok, file_attributes, same_file
+
+    ok = FALSE
+    SetMsgLevel(flags)
+
+    path = Trim(s)
+    if path <> "" and (flags & _DONT_EXPAND_) == 0
+        path = ExpandPath(path, TRUE)
+        if path == ""
+            BogusFilename(s)
+            RestoreMsgLevel()
+
+            return (ok)                     // early exit
+
+        endif
+        path = UserEnteredCase(s, path)
+    endif
+
+    file_attributes = 0
+    if path <> ""
+        file_attributes = FileExists(path)
+    endif
+
+    same_file = mFilenamesEqual(path, CurrFilename())
+    if not (GetBufferId(path) in 0, GetBufferId())
+        Warn(NAME_IN_USE, path)
+    elseif (flags & _OVERWRITE_) or
+            file_attributes == 0 or  // file does *not* exists
+            ((flags & _DONT_PROMPT_) == 0 and (same_file or _cmOverlayFileMenu(path) == 1)) // YES
+
+        UnlockCurrentFile()
+        if same_file
+            RenameDiskFile(CurrFilename(), path)
+        elseif BufferType() == _NORMAL_ and CurrFilename() <> ""
+            ExecHook(_ON_FILE_QUIT_)
+        endif
+        save_path = path
+        SetCurrFilename(path)
+        if LockCurrentFile(Query(FileLocking), file_attributes) in 0, 1     // 1 is CANT_CREATE  ???
+            SetRefreshWorld()
+            if file_attributes == 0
+                ClearBufferDaTmAttr()
+            else
+                UpdateBufferDaTmSize()
+            endif
+            if not same_file
+                TurnOnOkToEraseFlag()
+                PurgeSynhi()                    // unload synhi info for this file
+                if BufferType() == _NORMAL_ and CurrFilename() <> ""
+                    InitSynhiCurrFile()
+                    ExecHook(_ON_FIRST_EDIT_)
+                    ExecHook(_ON_CHANGING_FILES_)
+                endif
+                BrowseMode(FALSE)
+                FileChanged(TRUE)
+            endif
+            ok = TRUE
+        else
+            SetCurrFilename(save_path)
+            LockCurrentFile(Query(FileLocking))
+            Warn(ACCESS_DENIED, s)
+        endif
+    endif
+
+    RestoreMsgLevel()
+    return (ok)
+end
+
+public integer proc _cmReplaceFile2(string s, integer flags)
+    string fn[PATHLEN]
+    integer ok, msglevel, line, col, row, xoff
+
+    ok = FALSE
+    msglevel = Query(MsgLevel)
+    if flags & _DONT_PROMPT_
+        Set(MsgLevel, _NONE_)
+    endif
+
+    if (flags & _OVERWRITE_) == 0 and FileChanged()
+        if flags & _DONT_PROMPT_
+            goto error
+        endif
+        case _cmMaybeSaveIfChanged()
+            when 0
+                goto error
+            when 1
+                if not SaveFile()
+                    goto error
+                endif
+        endcase
+    endif
+
+    fn = ExpandPath(s, TRUE)
+
+    if Length(fn) == 0 or isWildPath(fn)
+        BogusFilename(fn)
+    elseif _cmChangeCurrFilename2("", _OVERWRITE_)      // will call ON_FILE_QUIT if needed
+        line = CurrLine()
+        col  = CurrCol()
+        row  = CurrRow()
+        xoff = CurrXoffset()
+        UnmarkBlock()       // what about other blocks and bookmarks???
+        EmptyBuffer()
+        ok = ReadFile(fn, INVALID_HANDLE) == 0
+        GotoLine(line)
+        ScrollToRow(row)
+        GotoXoffset(xoff)
+        GotoColumn(col)
+        ok = _cmChangeCurrFilename2(fn, _OVERWRITE_) and ok
+        FileChanged(FALSE)
+    endif
+
+    error:
+    Set(MsgLevel, msglevel)
+    return (ok)
+end
+
+public integer proc _cmReplaceFile()
+    string fn[PATHLEN]
+
+    if use_windows_dialogs()
+        fn = GetFilename("Replace File With")      // Replace File with
+        return (iif(fn == "", FALSE, _cmReplaceFile2(fn, 0)))
+    endif
+
+    fn = CurrFilename()
+    while _cmAskFilename(REPLACE_FILE_WITH, fn, 0, _EDIT_HISTORY_)
+        if _cmReplaceFile2(fn, 0)
+            return (TRUE)
+        endif
+    endwhile
+    return (FALSE)
+end
+
+public integer proc _cmChangeCurrFilename()
+    string fn[PATHLEN]
+
+    if use_windows_dialogs()
+        fn = GetFilename("New Filename", _WRITE_ACCESS_|_OVERWRITE_)    // New Filename
+        return (iif(fn == "", FALSE, _cmChangeCurrFilename2(fn, 0)))
+    endif
+
+    fn = CurrFilename()
+    while _cmAskFilename(NEW_FILENAME_MSG, fn, _WRITE_ACCESS_, _NEWNAME_HISTORY_)
+        if _cmChangeCurrFilename2(fn, 0)
+            return (TRUE)
+        endif
+    endwhile
+    return (FALSE)
+end
+
+/**************************************************************************
+  Save a file under a new name.
+  Do it the windows way:
+
+  Change the name of the current buffer to the new name, and
+  issue a SaveFile() command.
+
+  Issues:
+    another buffer with the same name
+    the file already exists on disk
+ **************************************************************************/
+public integer proc _cmRenameAndSaveFile()
+    string fn[_MAXPATH_] = CurrFilename()
+
+    loop
+        // if the user presses escape, just exit
+
+        if use_windows_dialogs()
+            fn = GetFilename("Rename and Save As", _WRITE_ACCESS_|_OVERWRITE_)
+            if fn == ""
+                return (FALSE)
+            endif
+        else
+            if not _cmAskFilename("Rename and Save As:", fn, _FULL_PATH_|_WRITE_ACCESS_, _EDIT_HISTORY_)
+                return (FALSE)
+            endif
+        endif
+
+        // if requested name is already the buffer name, just save it
+        if mFilenamesEqual(fn, CurrFilename())
+            break
+        endif
+
+        // if another buffer exists with that same name, warn the user
+        if GetBufferId(fn) <> 0
+            _cmMsgBox("Warning - Rename and Save As", "Cannot rename buffer to existing name", _OK_)
+        // if the file exists on disk, is it ok to overwrite?
+        elseif FileExists(fn)
+            if _cmMsgBox("Rename and Save As", "Overwrite Existing File?", _YES_NO_CANCEL_) == 1
+                break
+            endif
+        else
+            break
+        endif
+    endloop
+
+    // at this point, it is ok to change the name and save the file
+    return (_cmChangeCurrFilename2(fn, _OVERWRITE_) and SaveFile())
+end
+
+integer proc AskInsertFile(string fn)
+    string path[PATHLEN]
+
+    if fn == "" and use_windows_dialogs()
+        path = GetFilename("File to Insert", _MUST_EXIST_)    // File to insert
+        return (iif(path == "", FALSE, InsertFileNow(path)))
+    endif
+
+    path = fn
+    while _cmAskFilename(FILE_TO_INSERT_MSG, path, _MUST_EXIST_, _EDIT_HISTORY_)
+        if InsertFileNow(path)
+            return (TRUE)
+        endif
+    endwhile
+    return (FALSE)
+end
+
+// user callable entry point, when parms are passed
+public integer proc _cmInsertFile2(string fn, integer flags)
+    string path[PATHLEN]
+
+    if (flags & _DONT_PROMPT_)
+        return (InsertFileNow(fn, flags))
+    endif
+
+    path = ExpandPath(fn)
+
+    if Length(path) == 0 or (not isWildPath(path))
+        return (InsertFileNow(fn, flags))
+    endif
+
+    path = _cmPickFile(fn, 0)
+
+    if Length(path) and InsertFileNow(path, flags)
+        return (TRUE)
+    endif
+
+    return (AskInsertFile(path))
+end
+
+// user callable entry point
+public integer proc _cmInsertFile()
+    return (AskInsertFile(""))
+end
+
+integer proc edit_file_common(string prompt)
+    string fn[PATHLEN] = ""
+    string fn0[PATHLEN] = ""
+
+    if use_windows_dialogs()
+        fn = GetFilename(FILE_TO_EDIT_MSG, _EDIT_FILE_)
+        return (iif(fn == "", FALSE, EditFile(QuotePath(fn))))
+    endif
+
+    /***********************************************************************
+      Can't call AskFilename, because it doesn't handle multiple fn's.
+
+    while _cmAskFilename(FILE_TO_EDIT_MSG, fn, _EDIT_HISTORY_, 0)
+        if EditFile(fn)
+            return (GetBufferId())
+        endif
+    endwhile
+     ***********************************************************************/
+    if (BufferType() & (_HIDDEN_|_SYSTEM_)) == 0
+        AddHistoryStr(QuotePath(SplitPath(CurrFilename(), _DRIVE_|_PATH_)), _EDIT_HISTORY_)
+    endif
+    while loAsk(prompt, fn, _EDIT_HISTORY_, FN_COMP | MULTISELECT | TRIM_SPACES | SHOWDIR)
+        fn0 = fn
+        fn = ExpandTilde(fn)
+        if (Length(fn) or _cmPickDir(fn, _EDIT_HISTORY_, MULTISELECT, 0, 0)) and
+                iif(prompt == FILES_TO_EDIT_MSG, EditFile(fn, PROMPTED), EditThisFile(fn, PROMPTED))
+            return (GetBufferId())
+        endif
+        fn = fn0
+    endwhile
+    return (FALSE)
+end
+
+public integer proc _cmEditFile()
+    return (edit_file_common(FILES_TO_EDIT_MSG))
+end
+
+public integer proc _cmEditThisFile()
+    return (edit_file_common(FILE_TO_EDIT_MSG))
+end
+
+public integer proc _cmLoadKeyMacro()
+    string fn[PATHLEN]
+
+    fn = ''
+    while _cmAskFilename(LOAD_KEY_MACRO_MSG, fn, _MUST_EXIST_, _KEYMACRO_HISTORY_)
+        if LoadKeyMacro(fn)
+            return (TRUE)
+        endif
+    endwhile
+    return (FALSE)
+end
+
+public integer proc _cmSaveKeyMacro()
+    string fn[PATHLEN]
+
+    fn = ''
+    while _cmAskFilename(SAVE_KEY_MACRO_MSG, fn, _WRITE_ACCESS_, _KEYMACRO_HISTORY_)
+        if not FileExists(fn) or _cmOverLayFileMenu(fn) == 1 // YES
+            if SaveKeyMacro(fn)
+                return (TRUE)
+            endif
+        endif
+    endwhile
+    return (FALSE)
+end
+
+/*****************************************************************************
+  Load a macro.
+
+  - Handle wild-cards
+  - Keep retrying until user presses <Esc>
+  - issue error messages on failure.
+  Returns TRUE/FALSE.
+ *****************************************************************************/
+public integer proc _cmLoadMacro()
+    string fn[PATHLEN]
+
+    fn = ""
+    while _cmAskFilename(LOAD_MACRO_MSG, fn, _MUST_EXIST_, _LOADMACRO_HISTORY_)
+        if LoadMacro(fn)
+            Message(fn, LOADED)
+            return (TRUE)
+        endif
+    endwhile
+    return (FALSE)
+end
+
+public integer proc _cmExecLoadedMacro()
+    return (ViewPublics(0))
+end
+
+public integer proc _cmExecMacro()
+    string fn[PATHLEN], save_fn[PATHLEN]
+
+    fn = ""
+    while loAsk(EXEC_MACRO_MSG, fn, _EXECMACRO_HISTORY_, FN_COMP | TRIM_SPACES)
+        save_fn = fn
+        if Length(fn) == 0
+            if not PublicMacrosInMemory()
+                fn = "*.mac"
+            elseif _cmExecLoadedMacro()
+                return (TRUE)
+            else
+                goto continue_label
+            endif
+        endif
+
+        if NumFileTokens(fn) == 1 and not isMacroLoaded(fn)
+            fn = FixAndFindPath(fn, _EXECMACRO_HISTORY_)
+            if isWildPath(fn) and not _cmPickDir(fn, _EXECMACRO_HISTORY_, 0, 0, 0)
+                goto continue_label
+            endif
+            fn = QuotePath(fn)
+        endif
+
+        if ExecMacro(fn)
+            return (TRUE)
+        endif
+
+    continue_label:
+        fn = save_fn
+
+    endwhile
+    return (FALSE)
+end
+
+public integer proc _cmPurgeMacro()
+    return (ViewPublics(1))
+end
+
+/**************************************************************************
+  Find/Replace
+ **************************************************************************/
+public integer proc _cmFind2(string find_str, string opts)
+    Set(HiFind, 1)
+    return (lFind(find_str, opts))
+end
+
+public integer proc _cmReplace2(string find_str, string replace_str, string opts)
+    Set(HiFind, 1)
+    return (lReplace(find_str, replace_str, opts))
+end
+
+#if 1
+
+integer proc GetFindStr(var string find_str)
+    return (_cmAsk(SEARCH_FOR_MSG, find_str, _FIND_HISTORY_) and Length(find_str))
+end
+
+public integer proc _cmFind()
+    string find_str[MAXFINDLEN - 1] = '', opts[OPTIONSIZE - 1] = ''
+
+    if GetFindStr(find_str) and _cmAsk(FIND_OPTIONS_MSG, opts, _FIND_OPTIONS_HISTORY_)
+        return (_cmFind2(find_str, opts))
+    endif
+    SetLastFindUnknown()
+    return (FALSE)
+end
+
+public integer proc _cmReplace()
+    string find_str[MAXFINDLEN - 1] = '', replace_str[MAXFINDLEN - 1] = '', opts[OPTIONSIZE - 1] = ''
+
+    if GetFindStr(find_str) and
+            _cmAsk(REPLACE_WITH_MSG, replace_str, _REPLACE_HISTORY_) and
+            _cmAsk(REPL_OPTIONS_MSG, opts, _REPLACE_OPTIONS_HISTORY_)
+        return (_cmReplace2(find_str, replace_str, opts))
+    endif
+    SetLastFindUnknown()
+    return (FALSE)
+end
+
+#endif
+
+#if 0
+
+constant PROMPT_WIDTH = 50, OPTIONS_WIDTH = 40
+string find_str[255], replace_str[255], find_opts[12]
+integer menu_result, who, save_attr
+
+menu findMenu()
+    "&Find"     [find_str:PROMPT_WIDTH],
+        _cmRead(find_str, _FIND_HISTORY_),
+        _MF_DONT_CLOSE_
+    "&Options [ABGLIWX]" [find_opts:OPTIONS_WIDTH],
+        _cmRead(find_opts, _FIND_OPTIONS_HISTORY_),
+        _MF_DONT_CLOSE_
+    "(All-files Back Global Local Ignore-case Words reg-eXp)",
+        ,
+        _MF_SKIP_
+end
+
+menu replaceMenu()
+    "&Find"     [find_str:PROMPT_WIDTH],
+        _cmRead(find_str, _FIND_HISTORY_),
+        _MF_DONT_CLOSE_
+    "&Replace"  [replace_str:PROMPT_WIDTH],
+        _cmRead(replace_str, _REPLACE_HISTORY_),
+        _MF_DONT_CLOSE_
+    "&Options [ABGLIWNX]" [find_opts:OPTIONS_WIDTH],
+        _cmRead(find_opts, _REPLACE_OPTIONS_HISTORY_),
+        _MF_DONT_CLOSE_
+    "(All-files Back Global Local Ignore-case Words No-prompt reg-eXp)",
+        ,
+        _MF_SKIP_
+end
+
+keydef promptFindKeys
+    <enter>     EndProcess(TRUE)  PushKey(<escape>) menu_result = 1
+    <escape>    EndProcess(FALSE) PushKey(<escape>)
+    <alt x>     EndProcess(FALSE) PushKey(<escape>)
+    <tab>       EndProcess(TRUE)  PushKey(<enter>) PushKey(<tab>)
+    <shift tab> EndProcess(TRUE)  PushKey(<enter>) PushKey(<shift tab>)
+    <LeftBtn>   EndProcess(TRUE)  PushKey(<LeftBtn>)
+    <Alt f>     EndProcess(TRUE)  PushKey(<alt f>)
+    <Alt o>     EndProcess(TRUE)  PushKey(<alt o>)
+end
+
+keydef promptReplaceKeys
+    <Alt r>     EndProcess(TRUE)  PushKey(<alt r>)
+end
+
+proc onPromptStartup()
+    Set(MenuSelectAttr, save_attr)
+    Enable(promptFindKeys)
+    if who == _REPLACE_OPTIONS_HISTORY_
+        Enable(promptReplaceKeys)
+    endif
+end
+
+proc onPromptCleanup()
+    save_attr = Set(MenuSelectAttr, Query(MenuTextAttr))
+    Disable(promptFindKeys)
+    if who == _REPLACE_OPTIONS_HISTORY_
+        Disable(promptReplaceKeys)
+    endif
+end
+
+integer proc mFindReplace(integer opt_history, var integer result)
+    integer y, y2, menu_size
+
+    save_attr = Set(MenuSelectAttr, Query(MenuTextAttr))
+    who = opt_history
+    find_str    = GetHistoryStr(_FIND_HISTORY_, 1)
+    replace_str = GetHistoryStr(_REPLACE_HISTORY_, 1)
+    find_opts = GetHistoryStr(opt_history, 1)
+
+    menu_size = iif(opt_history == _FIND_OPTIONS_HISTORY_, 5, 6)
+    if Query(SpecialEffects) & _DRAW_SHADOWS_
+        menu_size = menu_size + 1
+    endif
+    y = Query(WindowY1) + CurrRow() + 1
+    y2 = Query(WindowY1) + Query(WindowRows) - 1
+    if y + menu_size - 1 > y2
+        y = Query(WindowY1) + CurrRow() - (menu_size + 1)
+    endif
+    Set(Y1, y)
+
+    Hook(_PROMPT_STARTUP_, onPromptStartup)
+    Hook(_PROMPT_CLEANUP_, onPromptCleanup)
+    PushKey(<enter>)
+    menu_result = 0
+    if opt_history == _FIND_OPTIONS_HISTORY_
+        findMenu()
+    elseif opt_history == _REPLACE_OPTIONS_HISTORY_
+        replaceMenu()
+    endif
+    Unhook(onPromptStartup)
+    Unhook(onPromptCleanup)
+    Set(MenuSelectAttr, save_attr)
+    if menu_result
+        if opt_history == _FIND_OPTIONS_HISTORY_
+            result = _cmFind2(find_str, find_opts)
+            return (TRUE)
+        elseif opt_history == _REPLACE_OPTIONS_HISTORY_
+            result = _cmReplace2(find_str, replace_str, find_opts)
+            return (TRUE)
+        endif
+    endif
+    return (FALSE)
+end
+
+public integer proc _cmFind()
+    integer result
+
+    if  mFindReplace(_FIND_OPTIONS_HISTORY_, result)
+        return (result)
+    endif
+
+    SetLastFindUnknown()
+    return (FALSE)
+end
+
+public integer proc _cmReplace()
+    integer result
+
+    if mFindReplace(_REPLACE_OPTIONS_HISTORY_, result)
+        return (result)
+    endif
+
+    SetLastFindUnknown()
+    return (FALSE)
+end
+
+#endif
+
+//************ end Find/Replace ***************************************
+
+public integer proc _cmFillBlock()
+    string s[128] = ''
+
+    return (isBlockInCurrFile() and _cmAsk(FILL_BLOCK_MSG, s, _FILLBLOCK_HISTORY_) and
+            Length(s) and
+            FillBlock(s))
+end
+
+integer proc GotoLineColumnCommon(string prompt, integer history, integer adjust)
+    string s[13]
+
+    s = ''
+    if _cmAskNumeric(prompt, s, history) and Length(s)
+        return (iif(s[1] == '+' or s[1] == '-', adjust, 0) + Val(s))
+    endif
+    return (adjust)
+end
+
+public integer proc _cmGotoLine()
+    return (GotoLine(GotoLineColumnCommon(GOTO_LINE_MSG, _GOTO_LINE_HISTORY_, CurrLine())))
+end
+
+public integer proc _cmGotoColumn()
+    return (GotoColumn(GotoLineColumnCommon(GOTO_COLUMN_MSG, _GOTO_COLUMN_HISTORY_, CurrCol())))
+end
+
+public integer proc _cmRepeatCmd()
+    string s[7] = ''
+
+    return (_cmAskNumeric(REPEAT_MSG, s, _REPEATCMD_HISTORY_) and Length(s) and RepeatCmd(Val(s)))
+end
+
+//*************** Dos command support **********************************
+
+constant MAXDOSLEN = 255
+#ifndef LINUX
+#if 0
+integer environment_space = 0
+#endif
+#endif
+
+/*
+  DONT_CLEAR
+  DONT_PROMPT
+  TEE
+  RETURN_CODE
+  RUN_DETACHED
+  PRESERVE_SCREEN
+ */
+
+// call a command directly
+public integer proc _cmlDos(string command, string cmdtail, integer dos_flags)
+    return (system(QuotePath(command), cmdtail, dos_flags))
+end
+
+// run a command via the shell
+public integer proc _cmDos2(string tail, integer flags)
+    return (system("", tail, flags|_USE_CMD_PROCESSOR_))
+end
+
+public integer proc _cmShell()
+    return (system("", "", _ALLOW_DETACHMENT_|_SHELL|_USE_CMD_PROCESSOR_|_DONT_PROMPT_))
+end
+
+public integer proc _cmDos()
+    string s[MAXDOSLEN] = ""
+
+    return (loAsk(DOS_COMMAND_MSG, s, _DOS_HISTORY_, SHOWDIR) and _cmDos2(s, _ALLOW_DETACHMENT_))
+end
+

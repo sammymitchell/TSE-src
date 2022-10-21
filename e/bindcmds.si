@@ -1,0 +1,1260 @@
+/*
+  Notes:
+  Removing "RemoveUnloadFiles()" from _cmExit() caused its time to go from
+  7 seconds to 1.2 seconds on quitting 144 loaded files.
+  It has been removed from other global quit routines as well.
+ */
+
+string proc UserEnteredCase(string user, string actual)
+    return (iif(EquiStr(GetNameExt(user), GetNameExt(actual)), GetDrivePath(actual) + GetNameExt(user), actual))
+end
+
+proc BogusFilename(string fn)
+    Warn(BOGUS_FILENAME, fn)
+end
+
+integer proc SetCurrDriveDir(string path)
+#ifdef WIN32
+    return (ChDir(path))
+#else
+    if Length(path) > 1 and path[2] == ':' and not LogDrive(path[1])
+        return (FALSE)
+    endif
+    return (ChDir(path))
+#endif
+end
+
+/****************************************************************************
+  Empties the current buffer
+  sets the binary mode to reclen
+  Loads fn into it
+  returns true(non-zero)/false(zero)
+
+  No hooks are called
+ ****************************************************************************/
+public integer proc _cmLoadBuffer(string path, integer reclen)
+    integer ok, level
+
+    EmptyBuffer()
+    BinaryMode(reclen)
+    PushLocation()
+    level = Set(MsgLevel, _NONE_)
+    ok = ReadFile(path, INVALID_HANDLE) == 0
+    Set(MsgLevel, level)
+    PopLocation()
+    return (ok)
+//    PushBlock()
+//    ok = InsertFile(fn, _DONT_PROMPT_)
+//    PopBlock()
+//    return (ok)
+end
+
+/****************************************************************************
+  Creates a new temporary buffer of type flags (_SYSTEM_ if not passed)
+  sets the binary mode to reclen
+  Loads fn into it
+  makes it the current buffer
+  returns id
+
+  No hooks are called
+ ****************************************************************************/
+public integer proc _cmEditBuffer(string fn, integer flags, integer reclen)
+    integer id
+
+    if (id = CreateBuffer("", iif(flags == 0, _SYSTEM_, flags))) <> 0
+        _cmLoadBuffer(fn, reclen)
+    endif
+    return (id)
+end
+
+// DONT_PROMPT, USEBLOCK
+public integer proc _cmfWriteFile(integer handle, integer flags)
+    return (WriteFile("", handle, flags))
+end
+
+public integer proc _cmfReadFile(integer handle)
+    return (ReadFile("", handle) == 0)
+end
+
+public string proc _cmCurrExt()
+    return (Lower(SplitPath(CurrFilename(), _EXT_)))
+end
+
+public integer proc _cmPushKeyStr(string keys)
+    integer i
+
+    for i = Length(keys) downto 1
+        if not PushKey(Asc(keys[i]))
+            return (FALSE)
+        endif
+    endfor
+    return (TRUE)
+end
+
+public string proc _cmDelStr(string s, integer p, integer n)
+    return (s[1:p - 1] + s[p + n:Length(s)])
+end
+
+public string proc _cmInsStr(string s1, string s, integer p)
+    return (s[1:p - 1] + s1 + s[p:Length(s)])
+end
+
+/*************************************************************************
+  January 24, 2005 SEM: Account for .UI public entry
+  It only it, there are not legit publics in memory
+ *************************************************************************/
+integer proc PublicMacrosInMemory()
+    integer id
+
+    id = GotoBufferId(PUBLIC_ID)
+
+    return (NumLines()>1, GotoBufferId(id))
+end
+
+public integer proc _cmMarkToEol()
+    if CurrPos() > CurrLineLen() or (Query(RemoveTrailingWhite) and PosLastNonWhite() < CurrPos())
+        return (FALSE)
+    endif
+    UnMarkBlock()
+    MarkStream()
+    PushPosition()
+    EndLine()
+    if CurrChar() < 0
+        Left()
+    endif
+    MarkStream()
+    PopPosition()
+    return (TRUE)
+end
+
+public integer proc _cmDelToEol2()
+    integer ok,
+        remove_trailing_white = Set(RemoveTrailingWhite, off)
+    PushBlock()
+    ok = _cmMarkToEol() and DelBlock()
+    Set(RemoveTrailingWhite, remove_trailing_white)
+    PopBlock()
+    return (ok)
+end
+
+public integer proc _cmKillToEol()
+    integer save_killmax = Set(KillMax, 0)
+
+    return (_cmDelToEol2(), Set(KillMax, save_killmax))
+end
+
+public integer proc _cmKillLine()
+    integer save_killmax = Set(KillMax, 0)
+
+    return (DelLine(), Set(KillMax, save_killmax))
+end
+
+proc RemoveMatches(string srch, string opts)
+    while lFind(srch, opts)
+        if not _cmKillLine()
+            break
+        endif
+    endwhile
+end
+
+menu bYesNo()
+    "&Yes"      , 1 ,CloseBefore
+    "&No"       , 2 ,CloseBefore
+    "&Cancel"   , 0 ,CloseBefore
+end
+
+public integer proc _cmYesNo(string title)
+    return (bYesNo(title))
+end _cmYesNo
+
+public integer proc _cmOverlayFileMenu(string fn)
+    return (MsgBox(SqueezePath(fn, Query(ScreenCols) - 4), OVERWRITE_FILE_MSG, _YES_NO_CANCEL_))
+end
+
+// return 0=escape, 1=Yes, 2=No/NotChanged
+public integer proc _cmMaybeSaveIfChanged()
+    if not FileChanged()
+        return (2)
+    endif
+    UpdateDisplay()
+    return (MsgBox("", 'Save changes to "' + CurrFilename() + '"', _YES_NO_CANCEL_))
+end
+
+public integer proc _cmDupLine()
+    PushBlock()
+    UnmarkBlock()
+    MarkLine()
+    if CopyBlock()
+        Down()
+    endif
+    PopBlock()
+    return (TRUE)
+end
+
+// Standard _cmDelRightWord command - with unkilling
+public integer proc _cmDelRightWord()
+    integer call_hook = TRUE, del_white_after_word = TRUE
+
+    // can't del eol if at eof or in history buffer
+    if CurrChar() < 0
+        if CurrLine() >= NumLines() or GetBufferId() == HISTORY_ID
+            return (FALSE)
+        endif
+        call_hook = FALSE
+    endif
+
+    PushPosition()					// save state
+    PushBlock()
+    UnmarkBlock()
+
+    MarkChar()                     // start marking...
+    if isword()
+        if left()
+            del_white_after_word = NOT isword()
+            right()
+        endif
+        EndWord()
+        if del_white_after_word and iswhite()
+            goto del_white
+        endif
+    elseif iswhite()
+del_white:
+        if not GotoNextNonWhite()
+            right()
+        endif
+    else
+        right()
+    endif
+    MarkChar()
+    PopPosition()
+    if GetBufferId() == HISTORY_ID
+        KillBlock()
+    else
+        DelBlock()
+    endif
+    PopBlock()
+    if call_hook and QueryEditState() == 0
+        ExecHook(_ON_DELCHAR_)
+    endif
+    return (TRUE)
+end
+
+//*
+//* _cmDelLeftWord: Delete the word to the left of the cursor
+//* For now, cannot be undeleted
+//*
+public integer proc _cmDelLeftWord()
+    if CurrChar() == _BEYOND_EOL_
+        EndLine()
+        return (TRUE)
+    endif
+    if not Left()
+        if GetBufferId() == HISTORY_ID
+            return (FALSE)
+        endif
+        if Up()
+            EndLine()
+            return (JoinLine())
+        endif
+        return (FALSE)
+    endif
+    if isWord()
+        repeat
+            DelChar()
+            if not Left()
+                goto common_return
+            endif
+        until not isWord()
+        if isWhite()
+            goto delete_white
+        else
+            Right()
+        endif
+    elseif isWhite()
+    delete_white:
+        repeat
+            DelChar()
+            if not Left()
+                goto common_return
+            endif
+        until not isWhite()
+        Right()
+    else
+        DelChar()
+    endif
+    common_return:
+
+    if QueryEditState() == 0
+        ExecHook(_ON_DELCHAR_)
+    endif
+    return (TRUE)
+end
+
+/*
+  Prevent WhenSwitchToFile() from executing, by manually switching back and
+  forth between files using GotoBufferId().
+ */
+public string proc _cmGetMarkedText()
+    integer block_type,
+            start,
+            cid = GetBufferId()
+
+    block_type = isBlockMarked()
+
+    if block_type
+        PushBlock()
+        PushPosition()
+        GotoBufferId(Query(BlockId))
+        PushPosition()
+        GotoBlockBegin()
+        start = iif(block_type == _LINE_, 1, CurrPos())
+        if block_type == _COLUMN_
+            GotoColumn(Query(BlockEndCol))
+        elseif block_type <> _LINE_ and Query(BlockBegLine) == Query(BlockEndLine)
+            GotoPos(Query(BlockEndCol))
+        else
+            EndLine()
+        endif
+        return (GetText(start, CurrPos() - start + 1),
+            PopPosition() GotoBufferId(cid) PopPosition() PopBlock())
+    endif
+    return ('')
+end
+
+public string proc _cmGetFoundText(integer tag)
+    PushBlock()
+    if MarkFoundText(tag)
+        return (_cmGetMarkedText(), PopBlock())
+    endif
+    PopBlock()
+    return ("")
+end
+
+/////////////// File saving and Exiting the editor routines /////////////
+
+string proc NewFilename(string before, string after, var integer count)
+    constant MAXTRIES = 25
+    string fn[80]
+
+    do MAXTRIES times
+        count = count + 1
+        fn = Format(before, count, after)
+        if GetBufferId(fn) == 0
+            return (fn)
+        endif
+    enddo
+    return ('')
+end
+
+integer newfile_count
+
+public integer proc _cmNewFile()
+    string fn[80] = NewFilename("<unnamed-", ">", newfile_count)
+    if Length(fn) and CreateBuffer(fn)
+        InitSynhiCurrFile()
+        ExecHook(_ON_FIRST_EDIT_)
+        ExecHook(_ON_CHANGING_FILES_)
+        return (GetBufferId())
+    endif
+    return (FALSE)
+end
+
+proc SetQuitting()
+    Set(QuittingFile, TRUE)
+end
+
+proc ClearQuitting()
+    Set(QuittingFile, FALSE)
+end
+
+integer proc NumFilesAndSystemKludge()
+    return (NumFiles() + (BufferType() <> _NORMAL_))
+end
+
+integer proc HandleLastFile()
+    integer n = NumFilesAndSystemKludge()
+
+    if n <= 1                           // at most, one left
+        ExecMacro("state -d")
+        if Query(QuitToPrompt) == FALSE
+            return (AbandonEditor())
+        else                            // otherwise, ask for more
+            if n == 1                   // quit the file if there, first
+                AbandonFile()
+            endif
+            OneWindow()
+            lShowEntryScreen()
+            _cmSignOn()
+            if EditThisFile()
+                UpdateDisplay(_HELPLINE_REFRESH_)
+                return (TRUE)
+            else
+                return (AbandonEditor())
+            endif
+        endif
+    endif
+    return (AbandonFile())              // lots of files left
+end
+
+// Save the current file, and then quit it
+public integer proc _cmSaveAndQuitFile()
+    SetQuitting()
+    return (SaveFile() and HandleLastFile(), ClearQuitting())
+end
+
+/*****************************************************************
+ If the current file hasn't been changed, quit it.  Otherwise,
+ allow the user to save it.
+ ******************************************************************/
+public integer proc _cmQuitFile()
+    case _cmMaybeSaveIfChanged()
+        when 0      return (False)
+        when 1      return (_cmSaveAndQuitFile())
+        // fall through on the '2' (No) case
+    endcase
+    return (HandleLastFile())
+end
+
+//************ MultiFile saving/exiting routines **************************
+
+// Need to call the _zON_CHANGING_FILES_ hooks for changed files, if we prompt
+integer proc SaveChangedFiles(integer prompt)
+    integer save_id, first_time
+
+    first_time = TRUE
+    save_id = GetBufferId()
+    do NumFilesAndSystemKludge() times
+        if FileChanged()
+            if prompt and not first_time
+                ExecHook(_ON_CHANGING_FILES_)
+            endif
+            case iif(prompt, _cmMaybeSaveIfChanged(), 1)
+                when 0  return (FALSE)
+                when 1  if not SaveFile()
+                            return (FALSE)
+                        endif
+            endcase
+        endif
+        NextFile(_DONT_LOAD_)
+        first_time = FALSE
+    enddo
+    GotoBufferId(save_id)
+    return (TRUE)
+end
+
+integer proc CommonExit(integer prompt)
+    integer ok
+
+    ExecHook(_ON_EXIT_CALLED_)
+    SetQuitting()
+    ok = SaveChangedFiles(prompt)
+    ClearQuitting()
+    return (iif(ok, AbandonEditor(), ok))
+end
+
+public integer proc _cmSaveAllFiles()
+    return (SaveChangedFiles(0))
+end
+
+public integer proc _cmSaveAllAndExit()
+    return (CommonExit(0))
+end
+
+public integer proc _cmExit()
+    return (CommonExit(1))
+end
+
+/////////////////////// end file saving and _exit routines ///////////////
+
+/////////////////////// Global Variable Get/Set package /////////////////
+// moved to C-code by SEM, May 2, 2000
+// now only used for push/pop strings...
+
+integer save_buff_id
+
+integer proc GotoGlobalVarBuffer()
+    save_buff_id = GotoBufferId(GLOBAL_VARS_ID)
+    return (save_buff_id)
+end
+
+proc GotoOriginalBuffer()
+    GotoBufferId(save_buff_id)
+end
+
+integer proc PushString(string s)
+    if GotoGlobalVarBuffer()
+        EndFile()
+        AddLine(s)
+        GotoOriginalBuffer()
+        return (TRUE)
+    endif
+    return (FALSE)
+end
+
+string proc PopString()
+    string s[255] = ""
+    if GotoGlobalVarBuffer()
+        GotoLine(NumLines())
+        s = GetText(1, sizeof(s))
+        _cmKillLine()
+        GotoOriginalBuffer()
+    endif
+    return (s)
+end
+
+/////////////////////// end Global Variable Get/Set package /////////////////
+
+integer clicks
+
+public integer proc _cmMouseMarking(integer type)
+    integer done
+    if MouseHotSpot() == _MOUSE_MARKING_
+        if (MouseWindowId() <> WindowId())
+            GotoWindow(MouseWindowId())
+            UpdateDisplay()
+            if WaitForMouseEvent(_MOUSE_RELEASE_ | _MOUSE_MOVE_ | _MOUSE_HOLD_TIME_) == _MOUSE_RELEASE_
+                clicks = 0
+                return (FALSE)
+            endif
+        endif
+
+        if GotoMouseCursor()
+            repeat
+                done = TRUE
+                UpdateDisplay()
+                case WaitForMouseEvent(_MOUSE_RELEASE_ | _MOUSE_MOVE_ | _MOUSE_HOLD_TIME_)
+                    when _MOUSE_MOVE_
+                        UnMarkBlock()
+                        Mark(type)
+                        TrackMouseCursor()
+                        Mark(type)
+                        clicks = 0
+                    when _MOUSE_HOLD_TIME_
+                        if KeyPressed()
+                            GetKey()
+                        endif
+                        done = FALSE
+                    otherwise
+                        if Query(Key) == Query(LastKey) and
+                           Query(MouseX) == Query(LastMouseX) and
+                           Query(MouseY) == Query(LastMouseY)
+                            case clicks
+                                when 0
+                                    clicks = 1
+                                when 1
+                                    MarkWord()
+                                    clicks = 2
+                                when 2
+                                    UnMarkBlock()
+                                    MarkLine()
+                                    MarkLine()
+                                    clicks = 0
+                            endcase
+                        else
+                            clicks = 1
+                            // clicks on a url would go here
+                        endif
+                endcase
+            until done
+        endif
+        return (TRUE)
+    endif
+    clicks = 0
+    return (FALSE)
+end
+
+public proc _cmMarkColumnCoords(integer beg_line, integer beg_col, integer end_line, integer end_col)
+    PushPosition()
+
+    UnMarkBlock()
+    GotoLine(end_line)
+    GotoColumn(end_col)
+    MarkColumn()
+    GotoLine(beg_line)
+    GotoColumn(beg_col)
+    MarkColumn()
+
+    PopPosition()
+end
+
+public proc _cmMarkLineCoords(integer beg_line, integer end_line)
+    PushPosition()
+
+    UnMarkBlock()
+    GotoLine(end_line)
+    MarkLine()
+    GotoLine(beg_line)
+    MarkLine()
+
+    PopPosition()
+end
+
+integer two = 2
+
+menu ControlBreakMenu()
+    history = two
+    NoEscape
+    x = 28
+    y = 12
+
+    "&Terminate",           TRUE,   CloseBefore
+    "&Continue"         ,   FALSE,  CloseBefore     // ClearUserBreak() ???
+end
+
+integer proc OnControlBreak(integer break_enum)
+    case break_enum
+        when _BREAK_MACRO_
+            if ControlBreakMenu(MACRO_INTERRUPTED)
+                Halt
+                return (TRUE)
+            endif
+        when _BREAK_FIND_
+            return (ControlBreakMenu(FIND_INTERRUPTED))
+        when _BREAK_SORT_
+            return (ControlBreakMenu(SORT_INTERRUPTED))
+        when _BREAK_LOADFILE_
+            return (ControlBreakMenu(LOADFILE_INTERRUPTED))
+    endcase
+    return (FALSE)
+end
+
+public proc _cmListHeader(string s)
+    Set(ListHeader, s)
+    Set(BorderFlags, Query(BorderFlags) | REFRESH_HEADER)
+end
+
+public proc _cmListFooter(string s)
+    Set(ListFooter, s)
+    Set(BorderFlags, Query(BorderFlags) | REFRESH_FOOTER)
+end
+
+public proc _cmWindowFooter(string s)
+    PutHelpLine(s, PUT_FOOTER)
+end
+
+/**************************************************************************
+  Make sure the find-string is onscreen
+ **************************************************************************/
+public proc _cmHiLiteFoundText(integer adj)
+    integer col, start_col, end_col, len, found_pos = CurrPos()
+
+    if not UserHiliteFoundText()
+        PushBlock()
+        MarkFoundText()
+        if DisplayMode() == _DISPLAY_HELP_
+            start_col = Query(BlockBegCol)
+            end_col   = Query(BlockEndCol) + 1
+        else
+            col = CurrCol()
+//            GotoBlockEnd()                // can cause possible scroll, since non-inc block, goes to 1 past end
+            GotoPos(Query(BlockEndCol))
+            end_col = CurrCol() + 1
+            GotoBlockBegin()
+            start_col = CurrCol()
+            GotoColumn(col)
+            end_col = Min(end_col - CurrXOffset(), EffectiveWidth() + 1)
+            start_col = Max(start_col - CurrXOffset(), 1)
+            len = end_col - start_col
+        endif
+        PopBlock()
+
+        UpdateDisplay(_CLINE_REFRESH_)  // forces VirtualCol() to be set if
+                                        // _DISPLAY_HELP_ mode
+        if DisplayMode() == _DISPLAY_HELP_
+            start_col = XlatHelp(start_col, TRUE)
+            end_col   = XlatHelp(end_col  , TRUE)
+            len = end_col - start_col
+        elseif DisplayMode() == _DISPLAY_PICKFILE_
+            case Query(DateFormat)
+                when 1..3       start_col = 44
+                when 4..6       start_col = 46
+                when 7..9       start_col = 45
+                when 10..12     start_col = 47
+            endcase
+            if found_pos > _PICKBUFFER_FNCOL_
+                start_col = start_col + (found_pos - _PICKBUFFER_FNCOL_)
+            endif
+        endif
+
+        if len <= 0
+            len = 1
+        endif
+
+        PutAttrXY(start_col + Query(WindowX1) - 1 + adj, CurrRow() + Query(WindowY1) - 1, Query(HiLiteAttr), len)
+    endif
+end
+
+string proc StartupFn(string fn)
+    string path[PATHLEN]
+    path = LoadDir() + fn
+    if FileExists(path)
+        return (path)
+    endif
+    path = SplitPath(LoadDir(1), _DRIVE_ | _PATH_) + fn
+    if FileExists(path)
+        return (path)
+    endif
+    return (fn)
+end
+
+/****************** TSELOAD --- AutoLoad Macro Support *************
+ The autoload file is maintained in memory WITHOUT the magic header line.
+ When the file is written to disk, the magic header line is added.
+ *******************************************************************/
+
+integer autoload_id, save_file_id
+string tseload[] = "tseload.dat"
+
+string AutoLoadEyeCatcher[] = "®TSE AutoLoad Macros¯"
+string startup_macrofn[] = "tsestart"
+
+string proc remove_mac_from(string fn)
+    return (StrReplace(".mac", fn, "", "$"))
+end
+
+proc AbandonAutoloadFile()
+    GotoBufferId(save_file_id)
+    FreeWorkBuffer(autoload_id)
+end
+
+proc KillEmptyLine()
+    if PosFirstNonWhite() == 0
+        _cmKillLine()
+    endif
+end
+
+integer proc SaveAutoLoad2()
+    string fn[PATHLEN] = LoadDir() + tseload
+    EndFile()
+    KillEmptyLine()
+    if NumLines() == 0
+        EraseDiskFile(fn)
+        return (FALSE)
+    endif
+
+    BegFile()
+    KillEmptyLine()
+    return (InsertLine(AutoLoadEyeCatcher) and
+        SaveAs(fn, _OVERWRITE_|_DONT_PROMPT_))
+end
+
+integer proc SaveAutoLoad()
+    return (SaveAutoLoad2(), FileChanged(FALSE))
+end
+
+integer proc EditAutoLoad()
+    save_file_id = GetBufferId()
+
+    autoload_id = GetWorkBuffer()
+    if _cmLoadBuffer(StartupFn(tseload), -1) or autoload_id
+        if GetText(1, CurrLineLen()) <> AutoLoadEyeCatcher
+            EmptyBuffer()
+        else
+            _cmKillLine()
+            EndFile()
+            KillEmptyLine()
+            BegFile()
+        endif
+        return (TRUE)
+    endif
+    return (FALSE)
+end
+
+integer proc DeleteMacro(string macro)
+    integer ok = 0
+
+    PushPosition()
+    if lFind(macro, "^gi$")
+        ok = _cmKillLine()
+    endif
+    PopPosition()
+    return (ok)
+end
+
+// -1 if can't load autoload file; 1 if macro found; 0 if not
+integer proc isAutoLoaded4(string macro)
+    string t_fn[_MAX_PATH_], fn[_MAX_PATH_] = remove_mac_from(macro)
+
+    if not EditAutoLoad()
+        return (-1)
+    endif
+
+    if lFind(fn, "^gi$")
+        return (1)
+    endif
+
+    if SplitPath(fn, _DRIVE_|_PATH_) == ""
+        t_fn = SearchPath(fn + ".mac", Query(TSEPath), "mac")
+        if length(t_fn) > 0
+            if lFind(t_fn, "^gi$")
+                return (1)
+            endif
+        endif
+    endif
+
+    return (0)
+end
+
+// boolean
+public integer proc _cmisAutoLoaded3(string fname)
+    integer rc
+
+    rc = isAutoLoaded4(fname)
+    if rc == -1
+        return (FALSE)
+    endif
+
+    AbandonAutoloadFile()
+    return (rc)
+end
+
+public integer proc _cmAddAutoLoadMacro(string macro)
+    integer ok = TRUE
+    string fn[_MAX_PATH_] = remove_mac_from(macro)
+
+    case isAutoLoaded4(fn)
+        when -1     ok = FALSE
+        when  0     ok = AddLine(fn) and SaveAutoLoad()
+    endcase
+    AbandonAutoloadFile()
+    return (ok)
+end
+
+public integer proc _cmDelAutoLoadMacro(string macro)
+    integer ok = FALSE
+    string fn[_MAX_PATH_] = remove_mac_from(macro)
+
+    if EditAutoLoad()
+        ok = DeleteMacro(fn) and SaveAutoLoad()
+    endif
+    AbandonAutoloadFile()
+    return (ok)
+end
+
+proc ListDelMacro()
+    if NumLines() and PosFirstNonWhite() and MsgBox("AutoLoad", DELETE_MSG + GetText(1, Query(ScreenCols) - 10), _YES_NO_CANCEL_) == 1
+        _cmKillLine()
+        EndProcess(-1)
+    endif
+end
+
+// ??? Should we use AskFilename???
+proc ListAddMacro()
+    integer cursor
+    string macro[PATHLEN] = ''
+
+    cursor = SetCursorOn()
+    if Ask(MACRO_FILENAME, macro)
+        macro = Trim(macro)
+        if Length(macro)
+            if FileExists(FixAndFindPath(macro, _LOADMACRO_HISTORY_)) or
+                    MsgBox("AutoLoad", format("'",macro, NOT_FOUND_ADD_ANYWAY), _YES_NO_CANCEL_) == 1
+                macro = remove_mac_from(macro)
+                DeleteMacro(macro)
+                AddLine(macro)
+                EndProcess(-1)
+            endif
+        endif
+    endif
+    Set(Cursor, cursor)
+end
+
+KeyDef AutoLoadMacroKeys
+    <Enter>     SaveAutoLoad()
+                EndProcess(1)
+    <Ins>       ListAddMacro()
+    <GreyIns>   ListAddMacro()
+    <Del>       ListDelMacro()
+    <GreyDel>   ListDelMacro()
+    <F1>        Help("Introduction To External Compiled Macros;AutoLoadList")
+end
+
+proc EditAutoLoadHook()
+    if Enable(AutoLoadMacroKeys)
+        _cmListFooter(AUTOLOAD_FOOTER)
+    endif
+    BreakHookChain()
+end
+
+public proc _cmEditAutoLoadList()
+    if EditAutoLoad()
+        BegFile()
+        InsertLine()
+        FileChanged(FALSE)
+        if Hook(_LIST_STARTUP_, EditAutoLoadHook)
+            repeat until List(AUTOLOAD_MACROS, Max(Query(ScreenCols), LongestLineInBuffer())) <> -1 and
+                (not FileChanged() or MsgBox("AutoLoad", ABANDON_CHANGES, _YES_NO_CANCEL_) == 1)
+            UnHook(EditAutoLoadHook)
+        endif
+    endif
+    AbandonAutoloadFile()
+end
+
+/**************************************************************************
+ 06/27/97 SEM: restore/save buffer id
+
+ Note: save_file_id is a global that is set when EditAutoLoad() is called.
+ It is switched to when AbandonAutoloadFile() is called.
+ **************************************************************************/
+public proc _cmLoadStartupMacros()
+    integer level, line, autoload_id
+    string fn[PATHLEN]
+
+    level = Set(MsgLevel, _NONE_)
+    ExecMacro(startup_macrofn)
+    if EditAutoLoad()                           // sets save_file_id
+        autoload_id = GetBufferId()             // be paranoid (autoload_id is global, but someone might monkey with autoloads from a startup macro???
+        if NumLines()
+            repeat
+                line = CurrLine()
+                fn = GetText(1, CurrLineLen())
+                GotoBufferId(save_file_id)      // back to old cur buff
+                Set(MsgLevel, _NONE_)
+                if not LoadMacro(fn)            // load the macro
+                    Set(MsgLevel, _WARNINGS_ONLY_)
+                    Warn("Error autoloading: ", fn)
+                endif
+                save_file_id = GetBufferId()    // save (possibly) new cur buff
+                GotoBufferId(autoload_id)       // and back to autoload buf
+                GotoLine(line)
+            until not Down()
+        endif
+    endif
+    Set(MsgLevel, level)
+    AbandonAutoloadFile()
+end
+
+public string proc _cmRootPath(string Path)
+    integer n, stop_at_backslash
+
+    if (Path[1:2] == "\\")
+        stop_at_backslash = FALSE
+        for n = 3 to Length(Path)
+            if isDirSeparator(Path[n])
+                if not stop_at_backslash
+                    stop_at_backslash = TRUE
+                else
+                    return (Path[1:n])
+                endif
+            endif
+        endfor
+        return (AddTrailingSlash(Path))
+    endif
+    return (AddTrailingSlash(SplitPath(Path, _DRIVE_)))
+end
+
+#if 0
+public string proc _cmRootPath(string path)
+#if WISHFUL_THINKING
+    integer len_found
+
+    if Pos("\\\\.*\\.*\\", path, "x", len_found)
+        return (AddTrailingSlash(path[1:len_found]))
+    endif
+    return (AddTrailingSlash(SplitPath(path, _DRIVE_)))
+#endif
+
+    if path[1:2] == "\\"
+        if (p = SlashPos(path[3:_MAXPATH_])) <> 0
+            p = p + 2 + SlashPos(path[3 + p:_MAXPATH_])
+        else
+            p = _MAXPATH_
+        endif
+        return (AddTrailingSlash(path[1:p]))
+    endif
+    return (AddTrailingSlash(SplitPath(path, _DRIVE_)))
+end
+#endif
+
+/**************************************************************************
+  _INCLUDE_REMOVEABLE_DRIVES_, _QUERY_REMOVEABLE_DRIVES_
+ **************************************************************************/
+public integer proc _cmNextDiskConnection(var string info, integer removeable_flags)
+    constant MEDIA_SIZE = 9
+    string local[255], mapping[255], volume[255], media[MEDIA_SIZE]
+    integer type, query_info
+
+    local = ""
+    while GetNextConnection(local)
+        mapping = ""
+        volume = ""
+        media = ""
+        query_info = TRUE
+
+        type = GetConnectionType(_cmRootPath(local))
+        case type
+            when _DRIVE_REMOVABLE_ media = "[floppy]"
+            when _DRIVE_FIXED_     media = "[fixed]"
+            when _DRIVE_REMOTE_    media = "[remote]"
+            when _DRIVE_CDROM_     media = "[CDROM]"
+            when _DRIVE_RAMDISK_   media = "[ramdisk]"
+        endcase
+
+        if type in _DRIVE_UNKNOWN_, _DRIVE_DOES_NOT_EXIST_
+            query_info = FALSE
+        elseif type == _DRIVE_REMOVABLE_
+            if not (removeable_flags & (_INCLUDE_REMOVEABLE_DRIVES_ | _QUERY_REMOVEABLE_DRIVES_))
+                continue
+            endif
+            if not (removeable_flags & _QUERY_REMOVEABLE_DRIVES_)
+                query_info = FALSE
+            endif
+        endif
+
+        if query_info
+            GetVolumeInfo(_cmRootPath(local), volume)
+        endif
+
+        if isDirSeparator(local[1])  // if UNC, set Remote to local and Clear local
+            mapping = local
+            local  = ""
+        endif
+
+        if type == _DRIVE_REMOTE_ and local <> ""
+            if not GetRemoteName(local, mapping)
+                mapping = ""
+            endif
+        endif
+
+        if mapping[1:2] == "\\"
+            mapping = DelStr(mapping, 1, 2)
+        endif
+
+        if volume <> "" and mapping <> ""
+            volume = volume + " on "
+        endif
+
+        info = Format(local:-3, media:-MEDIA_SIZE, volume, mapping)
+        return (TRUE)
+    endwhile
+    return (FALSE)
+end
+
+/**************************************************************************
+  Convert a binary WORD-length string to an integer
+ **************************************************************************/
+integer proc StrWord(string s)
+    return (Asc(s[2]) * 256 + Asc(s[1]))
+end
+
+string synhi_extlist_signature[] = "®TSE SynhiExtList¯"
+string synhi_fn[] = "tsesynhi.dat"
+
+/**************************************************************************
+  The number of .syn file defined is stored as a SHORT tacked onto the
+  header line in a tsesynhi.dat file.
+ **************************************************************************/
+integer proc VerifySynhiHeader()
+    integer num_syns
+
+    if CurrLineLen() == 0
+        return (0)
+    endif
+
+    if GetText(1, Length(synhi_extlist_signature)) == synhi_extlist_signature and
+            CurrLineLen() == Length(synhi_extlist_signature) + 2
+        num_syns = StrWord(GetText(Length(synhi_extlist_signature) + 1, 2))
+        if num_syns == 0 or num_syns + 2 == NumLines()
+            return (num_syns)
+        endif
+    endif
+    return (Warn(synhi_fn, " is corrupted"))
+end
+
+public integer proc _cmLoadSynhiAssoc()
+    integer cur_id, tid, ok, num_syns
+
+    ok = FALSE
+
+    cur_id = GetBufferId()
+    tid = GetWorkBuffer()
+    if _cmLoadBuffer(StartupFn(synhi_fn), -2) and NumLines()
+        num_syns = VerifySynhiHeader()
+        if num_syns
+            GotoLine(2)             // first data line
+            if BuildSynhiExtList(num_syns)
+                ok = TRUE
+            endif
+        endif
+    endif
+    GotoBufferId(cur_id)
+
+    FreeWorkBuffer(tid)
+    return (ok)
+end
+
+public integer proc _cmSetWindowHeight(integer n)
+    integer rows = Query(WindowRows), orig_rows = rows
+    if n > 0
+        if n <> rows
+            ResizeWindow(_DOWN_, rows - n)
+            rows = Query(WindowRows)
+            if n <> rows
+                ResizeWindow(_UP_, n - rows)
+            endif
+        endif
+    endif
+    return (Query(WindowRows) <> orig_rows)
+end
+
+public integer proc _cmSetWindowWidth(integer n)
+    integer cols = Query(WindowCols), orig_cols = cols
+    if n > 0
+        if n <> cols
+            ResizeWindow(_RIGHT_, cols - n)
+            cols = Query(WindowCols)
+            if n <> cols
+                ResizeWindow(_LEFT_, n - cols)
+            endif
+        endif
+    endif
+    return (Query(WindowRows) <> orig_cols)
+end
+
+// Cut/Copy Append to the Windows clipboard...
+
+/**************************************************************************
+  save block type
+  PushBlock
+  get a work buffer, make it current
+  PasteFromWinClip()
+  goto original buffer
+  set clipboard to work buffer
+  PopBlock
+  Cut or Copy Append
+  switch to clipboard
+  mark based on saved block type
+  CutToWinClip
+  swap current with clipboard
+  goto original buffer
+  free work buffer
+ **************************************************************************/
+public integer proc _cmCutCopyAppendToWinClip(integer cut_to_clip)
+    integer cur_id = GetBufferId(), work_id, clipboard_id, rc
+    integer block_type = isBlockInCurrFile()
+
+    if block_type == 0
+        if Query(UseCurrLineIfNoBlock) == False
+            return (False)
+        endif
+        MarkLine(CurrLine(), CurrLine())
+        block_type = _LINE_
+    endif
+
+    work_id = GetWorkBuffer()
+    if work_id == 0
+        return (FALSE)
+    endif
+    PushBlock()
+    if isWinClipAvailable()
+        PasteFromWinClip()
+    endif
+    GotoBufferId(cur_id)
+    clipboard_id = Set(ClipBoardId, work_id)
+    PopBlock()
+    if cut_to_clip
+        rc = CutAppend()
+    else
+        rc = CopyAppend()
+    endif
+    GotoBufferId(work_id)
+
+    if rc
+        MarkAll(block_type)
+        CutToWinClip()
+    endif
+    Set(ClipBoardId, clipboard_id)
+    GotoBufferId(cur_id)
+    FreeWorkBuffer(work_id)
+    return (rc)
+end
+
+constant RPB_MAX = 12
+integer replace_buffer[RPB_MAX], rpb_i = -1
+string valid_str_options[] = "biwx^$n"
+
+integer proc StrCommon(string needle, string haystack, var string options, integer start)
+    integer i, found = TRUE
+
+    // one-time code
+    if rpb_i == -1
+        for i = 1 to RPB_MAX
+            replace_buffer[i] = 0
+        endfor
+        rpb_i = 0
+    endif
+
+    // delete invalid options
+    options = Lower(options)
+    for i = 1 to Length(options)
+        if Pos(options[i], valid_str_options) == 0 and not isDigit(options[i])
+            options[i] = ' '
+        endif
+    endfor
+    options = options + 'n'
+
+    PushPosition()
+    rpb_i = rpb_i + 1
+    if not GotoBufferId(replace_buffer[rpb_i])
+        replace_buffer[rpb_i] = CreateTempBuffer()
+    endif
+    EmptyBuffer()
+    BegFile()
+    BegLine()
+    InsertText(haystack)
+    if Pos('b', options) == 0
+        BegLine()
+    endif
+
+    if start > 1
+        if lFind(needle, options)
+            if Pos('b', options) > 0
+                start = start - 1
+            endif
+            for i = 1 to start - 1
+                found = lRepeatFind()
+            endfor
+        else
+            found = FALSE
+        endif
+    endif
+
+    rpb_i = rpb_i - 1
+    return (found)
+end
+
+public string proc _cmStrReplace(string needle, string haystack, string rep_st, string opts, integer start)
+    string options[20], s2[255]
+    integer found
+
+    options = opts
+    found = StrCommon(needle, haystack, options, start)
+
+    if found and start >= 0
+        lReplace(needle, rep_st, options)
+    endif
+
+    s2 = GetText(1, CurrLineLen())
+    PopPosition()
+    return (s2)
+end
+
+public integer proc _cmStrFind(string needle, string haystack, string opts, integer start, var integer len)
+    string options[20]
+    integer found
+
+    options = opts
+    found = StrCommon(needle, haystack, options, start)
+    if start in 0,1
+        found = lFind(needle, options)
+    endif
+    if found
+        if Addr(len) <> 0
+            len = Length(GetFoundText())
+        endif
+        found = CurrPos()
+    endif
+    PopPosition()
+    return (found)
+end
+

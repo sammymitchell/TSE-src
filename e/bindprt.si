@@ -1,0 +1,111 @@
+/****************************************************************************
+    Printer interface module
+
+    PRINT.QED   1259 bytes (disk file)
+              -   58 bytes (for QED header)
+              ------
+              = 1201 bytes
+   4-08-92  Sammy Mitchell - initial code in 'C'
+   5-11-92  Kevin Carr - converted to QML
+   5-12-92  Steve Watkins/Sammy Mitchell - some optimizations
+   5-23-92  Sammy Mitchell - changes:
+                blocks with LineNumbers use file LineNumber
+                formfeed after print even if aborted by <escape>
+   6-23-92  Kevin
+                Optimized several routines and removed redundant error
+                    checking. Should print to file faster.
+   6-26-92  Kevin
+                Added code to handle printing header and/or footer with the
+                    current page number.
+                Also sured up some minor problems with margins and blocks.
+   6-29-92  Kevin
+                Added code for Date, Time, and Filename to the header/footers.
+   7-08-92  Kevin
+                Made several more optimizations and bug fixes to the
+                    header and footer routines.
+                Header and footers are now placed within the text area instead
+                    of the margin area as before.
+   7-09-92  Kevin
+                If PrintUseFF is FALSE then line feeds will be sent
+                    to position at the top of the next page.
+   7-14-92  Kevin
+                Fixed Sammy's problem with no FF after print job when no page
+                length is set.
+   9-28-92  Kevin
+                Fixed printing of hard tabs.  Before, 'TabWidth' number of
+                    spaces would be printed.  Now uses DistanceToTab() to
+                    determine number of spaces to print.
+   9-29-92  Kevin
+                Now forces pad char to be a space, then restores it at _exit.
+   3-03-93  Kevin
+                Changed message format.
+                Added HideMouse() and ShowMouse().
+   1-20-94  Kevin
+                Fixed problem where footer on last page was being placed 1
+                line too far down.
+   1-26-94  Kevin
+                Fixed bug #248 where a line with a FF char as the last non-white
+                would cause and extra blank line to be printed.
+   1-26-94  Kevin
+                If you have the following:
+                    Page Length set to 0, (for continuous printing)
+                    Header/Footer defined
+                    Optionally a Top/Bottom margin
+                    and imbedded FormFeed Characters.
+                The TopMargin and Header will be printed at the top of the
+                first page, and after each occurrance of an embedded FF char.
+                The Footer will be printed at the end of the last page and
+                immediatly before each embedded FF char.
+                The status line now shows the Page Number regardless of the
+                setting of PrintPageLength.
+   1-26-94  Kevin
+                Fixed problem where PrintPause would pause after the last
+                page when a First and Last page range was specified.
+   1-26-94  Kevin
+                Fixed problem where a footer would be printed on the next
+                page if a FF char was the last char in the file.
+   1-26-94  Kevin
+                Changed the PrintPause message to show the number of the
+                page that was just printed.
+   1-26-94  Kevin
+                Changed so that FALSE is returned if a page range is specified
+                that is outside the actual pages.  (For Richard <g>)
+  04-11-94  Kevin
+                Fixed bug where the LeftMargin was being printed once for
+                every page skipped when a range was begin printed.
+
+                Also fixed problem where an extra FF was being printed when
+                a page range was specified. (Found this one while debugging
+                the previous one).
+  04/18/94  Kevin
+                Fixed bug where extra FFs were being sent between copies.
+                Also changed the behavior so that when PringUseFF is FALSE
+                  the PrintAddFF == TRUE will cause blank lines to be printed
+                  at the end in order to advance to the next page.
+                Added some constants for LF, CR, and FF to make the code read
+                  a little better.
+ ****************************************************************************/
+
+// _RetryPrintMenu() is used external to this module //
+#if 0
+public integer proc _cmRetryPrintMenu()
+    return (MsgBox("", PRINTER_ERROR, _YES_NO_CANCEL_))
+end
+#endif
+
+integer proc print(string msg)
+    ExecMacro("print " + msg)
+    return (iif(Query(MacroCmdLine) == "true", TRUE, FALSE))
+end
+
+public integer proc _cmPrintFile()
+    return (print("file"))
+end
+
+public integer proc _cmPrintBlock()
+    return (print("block"))
+end
+
+/************************************************************************
+    end of Printer interface module
+ ************************************************************************/
