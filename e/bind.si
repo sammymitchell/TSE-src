@@ -36,37 +36,16 @@ end
 
 DataDef SignonScreen
 #ifdef GUI
- #ifdef BETA
-    chr(21) + chr(08) + "The SemWare Editor Professional " + "4.48"                                  //  1   1
- #else
-    chr(21) + chr(08) + "The SemWare Editor Professional " + "4.48"                                  //  1   1
- #endif
+    chr(25)  + chr(01) + "The SemWare Editor 4.50.rc1"
 #else
- #ifdef BETA
-    chr(16) + chr(08) + "The SemWare Editor Professional (Console) " + "4.48"                        //  1   1
- #else
-    chr(16) + chr(08) + "The SemWare Editor Professional (Console) " + "4.48"                        //  1   1
- #endif
+    chr(09)  + chr(01) + "The SemWare Editor (Console) 4.50.rc1"
 #endif
-    Chr(8)  + Chr(09) + "Copyright 1991-2022 SemWare Corp.  All rights reserved worldwide."     //  2   2
-#ifdef BETA
-    chr(9)   + chr(10) + ""                                                                              //  5   5
-    Chr(26)  + Chr(11) + "This is the " + "2022 Oct 17" + " version."                                       //  5
-    chr(7)   + chr(12) + ""//This is a BETA version.  Please report problems to:"
-#ifdef LINUX
-    chr(7)   + chr(13) + ""//"(private) beta.test@semware.com (list) tse-linux@googlegroups.com"
-#else
-    chr(7)   + chr(13) + ""//"(private) beta.test@semware.com (list) tsepro-beta@googlegroups.com"
-#endif
-#else
-    Chr(26) + Chr(11) + "This is the " + "2022 Oct 17" + " version."                                       //  5
-    chr(34) + chr(12) + "www.semware.com"              //  4   4
-    chr(9)  + chr(13) + ""                                                                              //  5   5
-#endif
+    Chr(09)  + Chr(01) + "Copyright 1991-2023 SemWare.  All rights reserved worldwide."
+    Chr(23)  + Chr(01) + "This is the 2023 Jan 04 version"                                       //  5
+    chr(33)  + chr(01) + "semware.com"
 end
 
 integer about_buf
-string c_startup_dir[] = "Startup dir: "
 string c_ui[] = "ui: "
 string memory_used[] = "Memory Used:"
 constant WRAP_CHAR = 13
@@ -84,22 +63,22 @@ proc build_about_buf()
 
         for i = 1 to n
             ReadCompressedLine()    // reads into workline
-            #ifdef BETA
-            if (i in 1..7)
-            #else
             if (i in 1..5)
-            #endif
                 if i == 6
                     AddLine("", about_buf)
                 endif
                 work = WorkLine()
-                AddLine(Format(' ':ASC(work[1]) - 8, work[3:80]), about_buf)
+                //if centered wanted...
+                //AddLine(Format(' ':ASC(work[1]) - 8, work[3:80]), about_buf)
+                //otherwise:
+                AddLine(Format(work[3:80]), about_buf)
             endif
         endfor
         AddLine("", about_buf)
-        AddLine(c_startup_dir + SqueezePath(Query(StartupPath), _USE_HOME_PATH_), about_buf)
-        AddLine("Loaded from: " + SqueezePath(Query(PathToExe), _USE_HOME_PATH_), about_buf)
-        AddLine(c_ui + SqueezePath(Query(UIFilename), _USE_HOME_PATH_), about_buf)
+        AddLine("Startup dir: " + SqueezePath(Query(StartupPath), _USE_HOME_PATH_), about_buf)
+        AddLine("Program:     " + SqueezePath(Query(PathToExe), _USE_HOME_PATH_), about_buf)
+        AddLine("Load dir:    " + SqueezePath(LoadDir(), _USE_HOME_PATH_), about_buf)
+        AddLine(c_ui + "         " + SqueezePath(Query(UIFilename), _USE_HOME_PATH_), about_buf)
         AddLine(Format("Started at: ", GetDateStr(), " ", GetTimeStr()), about_buf)
         AddLine("Started From CMD Prompt: " + Str(StartedFromDosPrompt()), about_buf)
         AddLine(memory_used, about_buf)
@@ -114,16 +93,16 @@ public proc _cmAbout()
     string mem[32]
 
     if memgb > 0
-        mem = format(memgb, ".", remgb, " gb")
+        mem = format(memgb, ".", remgb, " GB")
     elseif memmb
-        mem = format(memmb, ".", remmb, " mb")
+        mem = format(memmb, ".", remmb, " MB")
     else
-        mem = format(memkb, " kb")
+        mem = format(memkb, " kB")
     endif
 
     PushLocation()
     GotoBufferId(about_buf)
-    if lFind(c_ui + "\c", "^gx")
+    if lFind(c_ui + "[ ]#\c", "^gx")
         InsertText(SqueezePath(Query(UIFilename), _USE_HOME_PATH_), _OVERWRITE_)
         KillToEOL()
     endif

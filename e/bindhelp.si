@@ -70,7 +70,7 @@ string  LinkSearch[]    = '®L{[~{}]*}{\{{.*}\}}?¯{.*}®/L¯'
 #define nLINKREDIRECT   3
 #define nLINK           4
 
-DataDef HelpData
+Datadef HelpData
 " ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ ®B¯Overview®/B¯ ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿"
 " ³ ®B¯Help on Help®/B¯       <Alt H>/<F1>          ®B¯BackTrack®/B¯    <Alt B>/<Alt F1>  ³"
 " ³ ®B¯Table of Contents®/B¯  <Alt C>/<Shift F1>    ®B¯Search Help®/B¯  <Alt S>           ³"
@@ -149,8 +149,8 @@ CmdMap MarkCmdMap
     Prologue = MarkHelpPrologue()
     Startup  = MarkHelpStartup()
     //Cleanup  = HelpCleanup()
-    KeyDef   = ForcedKeys
-    flags    = EXCLUSIVE
+    Keydef   = ForcedKeys
+    Flags    = EXCLUSIVE
 
     [RepeatFind]    RepeatSearch()
 
@@ -211,7 +211,7 @@ proc MarkHelp(integer mark_line)
 end
 
 integer proc IsIndex()
-    return (lower(help_topic) == lower(INDEX))
+    return (Lower(help_topic) == Lower(INDEX))
 end
 
 constant ERR_TOPIC_NOT_FOUND =   -1,
@@ -222,19 +222,38 @@ constant ERR_TOPIC_NOT_FOUND =   -1,
 integer external_help_found // 0 first time, -1 == not-found, otherwise, found
 
 integer proc ExternalHelp(string options, string topic)
-    integer msglevel, ok = FALSE
+    integer MsgLevel, ok = FALSE
 
     if external_help_found <> -1
         if external_help_found == 0 and (external_help_found =
                 Length(SearchPath("helphelp.mac", Query(TSEPath), "mac"))) == 0
             external_help_found = -1
         else
-            msglevel = Set(MsgLevel, _NONE_)
+            MsgLevel = Set(MsgLevel, _NONE_)
             ok = ExecMacro(Format("helphelp"; options; topic)) and
                     Query(MacroCmdLine) == "true"
-            Set(MsgLevel, msglevel)
+            if ok
+              // Carlo, 28 Dec 2022
+              // A non-empty value for the bindhelp variable help_topic is
+              // required for TSE's help history to function.
+              // For the help history to function well, an existing non-TSE
+              // (help) file for the bindhelp variable help_fn is necessary as
+              // well.
+              // The external help system should return values for these two
+              // bindhelp variables through the HELP_TOPIC_ID buffer variables
+              // "help_topic" and "help_fn".
+              // If it did not, then the originally requested topic is inserted
+              // to improve the help history's functionality anyway.
+              help_topic = GetBufferStr('help_topic', HELP_TOPIC_ID)
+              help_topic = iif(help_topic == '', topic, help_topic)
+              help_fn    = GetBufferStr('help_fn'   , HELP_TOPIC_ID)
+            else
+              help_fn    = ''
+            endif
+            Set(MsgLevel, MsgLevel)
         endif
     endif
+
     return (ok)
 end
 
@@ -243,13 +262,13 @@ integer proc Error(string msg, integer no)
     GotoBufferId(HELP_TOPIC_ID)
     EmptyBuffer()
 
-    if lower(help_topic) == lower(KEY_ASSIGNMENTS)
+    if Lower(help_topic) == Lower(KEY_ASSIGNMENTS)
         InsertKeyAssignments()
     elseif not ExternalHelp("-h", help_topic)   //???XXX need full topic here
         do 10 times
             AddLine()
         enddo
-        AddLine(format('':(Query(WindowCols) - length(msg)) / 2,msg))
+        AddLine(Format('':(Query(WindowCols) - Length(msg)) / 2,msg))
         BegFile()
     endif
     return (FALSE)
@@ -293,7 +312,7 @@ string proc JustTopic(string full_topic)
     return (full_topic)
 end
 
-string proc LoadTopicInfo(var integer off, var integer num_lines, var integer index_flags)
+string proc LoadTopicInfo(var integer OFF, var integer num_lines, var integer index_flags)
     // and load structure information
     off         = PeekLong(CurrLinePtr()) + base_offset
     num_lines   = PeekWord(AdjPtr(CurrLinePtr(), 4          ))
@@ -323,7 +342,7 @@ integer proc FindTopicInIndex(string full_topic)
     return (FALSE)
 end
 
-string  search_keyword[64], prologue_search[sizeof(search_keyword)]
+string  search_keyword[64], prologue_search[SizeOf(search_keyword)]
 integer search_type
 
 integer load_index_if_not_found,
@@ -334,7 +353,7 @@ forward menu SearchMenu()
 forward integer proc LookupTopic(string new_topic, integer search_dir)
 
 proc GetTopic(var string topic)
-    topic = GetText(6 + 1 + sizeof(search_keyword),CurrLineLen())
+    topic = GetText(6 + 1 + SizeOf(search_keyword),CurrLineLen())
 end
 
 integer search_line, view_topics_id, last_pass_invoked_search
@@ -344,7 +363,7 @@ string  previous_fn[PATHLEN]
 integer previous_line, previous_row, previous_pos
 
 integer proc SameTopic(string topic)
-    return (topic == format(previous_fn,'|',previous_topic))
+    return (topic == Format(previous_fn,'|',previous_topic))
 end
 
 proc SaveTopicPosition()
@@ -370,7 +389,7 @@ proc SaveTopicPosition()
         n = iif(last_pass_invoked_search, Length(search_keyword),0)
         BegLine()
         _cmKillToEol()
-        InsertText(format(line, chr(previous_row), chr(previous_pos),chr(index_flags),chr(n),search_keyword:-sizeof(search_keyword),previous_fn,'|',previous_topic), _OVERWRITE_)
+        InsertText(Format(line, Chr(previous_row), Chr(previous_pos),Chr(index_flags),Chr(n),search_keyword:-sizeof(search_keyword),previous_fn,'|',previous_topic), _OVERWRITE_)
         GotoBufferId(id)
     endif
 end
@@ -411,7 +430,7 @@ end
 integer proc OpenHelpFile(string fn)
     help_fn = fn
     handle = fOpen(help_fn, _OPEN_READONLY_ | _OPEN_DENYWRITE_)
-    return (iif(handle > 0, TRUE, Error(format(HELP_FILE,help_fn,NOT_FOUND), ERR_FILE_NOT_FOUND)))
+    return (iif(handle > 0, TRUE, Error(Format(HELP_FILE,help_fn,NOT_FOUND), ERR_FILE_NOT_FOUND)))
 end
 
 proc CloseHelpFile()
@@ -431,9 +450,9 @@ integer proc LoadHeader(string passed_fn)
         endif
         if Length(fn) == 0
             if LocalHelp(-1)
-                fn = SplitPath(CurrMacroFileName(),_DRIVE_|_NAME_) + ".hlp"
+                fn = SplitPath(CurrMacroFilename(),_DRIVE_|_NAME_) + ".hlp"
                 if not FileExists(fn)
-                    fn = SplitPath(CurrMacroFileName(),_NAME_)
+                    fn = SplitPath(CurrMacroFilename(),_NAME_)
                 endif
             endif
         endif
@@ -463,7 +482,7 @@ integer proc LoadHeader(string passed_fn)
         if new_file or not header_loaded
             header_loaded = FALSE
             index_loaded = FALSE
-            if VerifyHelp(handle) == 0 and fRead(handle, header, sizeof(header)) == sizeof(header)
+            if VerifyHelp(handle) == 0 and fRead(handle, header, SizeOf(header)) == SizeOf(header)
                 help_fn     = fn
                 first_pass  = FALSE
                 top14       = header[1:TOP14_LEN]
@@ -475,7 +494,7 @@ integer proc LoadHeader(string passed_fn)
             endif
             CloseHelpFile()
             help_fn = ''
-            return (Error(format("'",fn,"' ",IS_NOT_A_VALID_HELP_FILE), ERR_INVALID_FILE))
+            return (Error(Format("'",fn,"' ",IS_NOT_A_VALID_HELP_FILE), ERR_INVALID_FILE))
         endif
     endif
     return (TRUE)
@@ -484,7 +503,7 @@ end
 proc TopicNotFound(string topic)
     // Assume we're in HELP_TOPIC_ID
     EmptyBuffer()
-    Error(format(TOPIC_NOT_FOUND,topic,NOT_FOUND), ERR_TOPIC_NOT_FOUND)
+    Error(Format(TOPIC_NOT_FOUND,topic,NOT_FOUND), ERR_TOPIC_NOT_FOUND)
 end
 
 integer new_title, search_from_beginning, current_topic_line
@@ -509,14 +528,14 @@ end
 
 proc StripFilenameAndTopic(var string fn, var string topic)
     integer n
-    if (n = pos('|',topic)) <> 0
+    if (n = Pos('|',topic)) <> 0
         fn = topic[1:n-1]
-        topic = topic[n+1:sizeof(topic)]
+        topic = topic[n+1:SizeOf(topic)]
     endif
 end
 
 integer proc LookupTopic(string full_passed_topic, integer search_dir)
-    integer width, off, num_lines, n, found
+    integer width, OFF, num_lines, n, found
     string topic[TOPIC_SIZE], fn[PATHLEN], pretty_topic[TOPIC_SIZE]
 
     topic = full_passed_topic
@@ -557,7 +576,7 @@ integer proc LookupTopic(string full_passed_topic, integer search_dir)
 
         current_topic_line = CurrLine()
         if found
-            pretty_topic = LoadTopicInfo(off, num_lines, index_flags)
+            pretty_topic = LoadTopicInfo(OFF, num_lines, index_flags)
             if PosSubtopic(help_topic)
                 help_topic = pretty_topic + ';' + JustSubtopic(help_topic)
             else
@@ -566,7 +585,7 @@ integer proc LookupTopic(string full_passed_topic, integer search_dir)
 
             GotoBufferId(HELP_TOPIC_ID)
 
-            if fSeek(handle, off, 0) == off
+            if fSeek(handle, OFF, 0) == OFF
                 // Insert topic
                 EmptyBuffer()
 
@@ -585,7 +604,7 @@ integer proc LookupTopic(string full_passed_topic, integer search_dir)
                         GotoBufferId(HELP_HEADER_ID)
                         goto retry_2
                     endif
-                    topic = GetText(1,sizeof(help_topic))
+                    topic = GetText(1,SizeOf(help_topic))
                     //??? check for infinite loop (give it a max of 10 times or so)
                     goto retry
                 endif
@@ -598,10 +617,10 @@ integer proc LookupTopic(string full_passed_topic, integer search_dir)
             else
                 Error(CORRUPTED_HELP_FILE, ERR_CORRUPTED_FILE)
             endif
-        elseif lower(help_topic) == lower(HELP_ON_HELP)
+        elseif Lower(help_topic) == Lower(HELP_ON_HELP)
             GotoBufferId(HELP_TOPIC_ID)
             InsertData(HelpData)
-        elseif lower(help_topic) == lower(KEY_ASSIGNMENTS)
+        elseif Lower(help_topic) == Lower(KEY_ASSIGNMENTS)
             GotoBufferId(HELP_TOPIC_ID)
             InsertKeyAssignments()
         elseif IsIndex()
@@ -650,7 +669,7 @@ integer proc LookupTopic(string full_passed_topic, integer search_dir)
         endif
     else
         GotoBufferId(HELP_TOPIC_ID)
-        if lower(help_topic) == lower(HELP_ON_HELP)
+        if Lower(help_topic) == Lower(HELP_ON_HELP)
             width = InsertData(HelpData)
         endif
     endif
@@ -663,7 +682,7 @@ integer proc GotoTopic(string topic)
 end
 
 integer proc isCursorOnLink()
-    return (CurrChar() == chTAG_START and Upcase(CurrChar(CurrPos() + 1)) == chLINK)
+    return (CurrChar() == chTAG_START and UpCase(CurrChar(CurrPos() + 1)) == chLINK)
 end
 
 integer proc isGotoNewLink()
@@ -856,11 +875,11 @@ string proc CleanedUpTopic(string topic)
                 s = s + chr(Val(topic[m+2:32]))
             endif
             hide_level = hide_level + 1
-        elseif ch == ASC("¯")
+        elseif ch == Asc("¯")
             hide_level = hide_level - 1
         else
             if hide_level == 0
-                s = s + chr(ch)
+                s = s + Chr(ch)
             endif
         endif
     endfor
@@ -872,7 +891,7 @@ proc HelpPrologue()
 
     // make sure finds never scroll screen since HighLight and UpdateDisplay()
     // logic can't handle horizontal scrolling
-    GotoXOffset(0)
+    GotoXoffset(0)
 
     if search_msg_window_active
         UpdateSearchWindow()
@@ -971,7 +990,7 @@ proc GotoTopicAtCursor()
     integer maxlen, infobox
 
     if isCursorOnLink() and lFind(LinkSearch,"xc")       //???XXX need Find("s", "CurrPos Only")
-        infobox = Upcase(CurrChar(CurrPos() + 2)) == chINFOLINK
+        infobox = UpCase(CurrChar(CurrPos() + 2)) == chINFOLINK
         prologue_search = ''
         if GetBufferId() == view_topics_id
             prologue_search = search_keyword
@@ -1263,7 +1282,7 @@ public integer proc _cmlHelp(string topic, integer flag)
     return (err_no)
 end _cmlHelp
 
-public proc _cmHelpDispatch(integer flags)
+public proc _cmHelpDispatch(integer Flags)
     _cmlHelp(TABLE_OF_CONTENTS, flags)
 end
 
@@ -1559,7 +1578,7 @@ end
 #define INSERT_CODES        0x0001
 #define RETURN_ERROR_CODE   0x8000
 
-public integer proc _cmInsertTopic(string topic, integer flags)
+public integer proc _cmInsertTopic(string topic, integer Flags)
     integer id, msg_level
 
     first_pass = TRUE
@@ -1597,7 +1616,7 @@ public integer proc _cmInsertTopic(string topic, integer flags)
 
     Set(MsgLevel,msg_level)
 
-    if (flags & RETURN_ERROR_CODE)
+    if (Flags & RETURN_ERROR_CODE)
         return (err_no)
     endif
     return (err_no == 0)

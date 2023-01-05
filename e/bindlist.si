@@ -1600,7 +1600,7 @@ public integer proc _cmPickDir(var string path, integer history, integer flags, 
         if (flags & _RECURSE_DIRS_) == 0
             list_flags = list_flags | _ANCHOR_SEARCH_
         endif
-        if (choice = ListWindow(SqueezePath(spath, width), width + 2, Query(ScreenRows), list_flags, PickCmdMap)) <> 0
+        if (choice = ListWindow(SqueezePath(spath, width|_USE_HOME_PATH_), width + 2, Query(ScreenRows), list_flags, PickCmdMap)) <> 0
             last_line = CurrLine() + 1
             GotoBufferId(VISITED_DIRS_ID)
             RemoveMatches(GetDrivePath(spath), "gi$")
